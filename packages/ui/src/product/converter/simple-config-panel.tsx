@@ -28,7 +28,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@subboost/ui/component
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@subboost/ui/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@subboost/ui/components/ui/dialog";
 import { confirm } from "@subboost/ui/components/ui/confirm-dialog";
-import { useToast } from "@subboost/ui/components/ui/use-toast";
+import { useToast } from "@subboost/ui/components/ui/toaster";
 import { withBasePath } from "@subboost/ui/lib/base-path";
 import { useConfigStore } from "@subboost/ui/store/config-store";
 import { batchFormatNodesWithRegion, detectNodeRegion } from "@subboost/core/node-region-formatter";
