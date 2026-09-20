@@ -362,9 +362,9 @@ export const initialState: ConfigState = {
     { id: "2", type: "yaml", content: "" },
     { id: "3", type: "nodes", content: "" },
   ],
-  // 默认选择“精简版”模板
-  template: "minimal",
-  enabledProxyGroups: TEMPLATES.minimal.groups,
+  // 默认选择“完整版”模板
+  template: "full",
+  enabledProxyGroups: TEMPLATES.full.groups,
   hiddenProxyGroups: [],
   customProxyGroups: [], // 自定义分流组
   proxyGroupAdvanced: {},

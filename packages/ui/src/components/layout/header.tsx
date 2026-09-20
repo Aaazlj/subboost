@@ -6,20 +6,12 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   Home,
-  LayoutDashboard,
-  Library,
-  HelpCircle,
-  Menu,
-  X,
-  LogIn,
-  Shield,
+  Lock,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@subboost/ui/lib/utils";
 import { IconButton } from "@subboost/ui/components/ui/icon-button";
-import { UserMenu, type AccountMenuItem } from "@subboost/ui/components/auth/user-menu";
-import { captureAuthConfigHandoff } from "@subboost/ui/store/config-store/auth-handoff";
-import { useConfigStore } from "@subboost/ui/store/config-store";
+import type { AccountMenuItem } from "@subboost/ui/components/auth/user-menu";
 import { useUserStore } from "@subboost/ui/store/user-store";
 
 type HeaderMode = "default" | "local";
@@ -40,14 +32,11 @@ type NavItem = {
 };
 
 const sharedNavItems: NavItem[] = [
-  { href: "/", label: "首页", icon: Home },
-  { href: "/dashboard", label: "我的订阅", icon: LayoutDashboard, authOnly: true },
-  { href: "/templates", label: "模板库", icon: Library },
+  { href: "/", label: "配置生成", icon: Home },
 ];
 
 const defaultNavItems: NavItem[] = [
   ...sharedNavItems,
-  { href: "/faq", label: "FAQ", icon: HelpCircle },
 ];
 
 const localNavItems: NavItem[] = [
@@ -112,7 +101,6 @@ export function Header({
   privilegedMenuItem?: AccountMenuItem;
 }) {
   const pathname = usePathname();
-  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
   const { user } = useUserStore();
   const canShowPrivilegedItem = Boolean(privilegedMenuItem && user?.isAdmin && !user.isBanned);
   const navItems = mode === "local" ? localNavItems : defaultNavItems;
@@ -186,81 +174,20 @@ export function Header({
 
           {/* Right Side Actions */}
           <div className="flex items-center gap-2">
-            {/* User Menu */}
-            <UserMenu privilegedMenuItem={privilegedMenuItem} />
-
-            {/* Mobile Menu Button */}
             <IconButton
-              label={mobileMenuOpen ? "关闭导航菜单" : "打开导航菜单"}
+              label="锁定面板"
+              title="锁定面板"
               variant="ghost"
-              aria-expanded={mobileMenuOpen}
-              aria-controls="subboost-mobile-navigation"
-              className="rounded-lg p-2 transition-colors hover:bg-white/5 md:hidden"
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="rounded-lg p-2 text-white/60 hover:text-white hover:bg-white/5"
+              onClick={async () => {
+                await fetch("/api/auth/logout", { method: "POST" });
+                window.location.reload();
+              }}
             >
-              {mobileMenuOpen ? (
-                <X className="w-5 h-5 text-white/60" />
-              ) : (
-                <Menu className="w-5 h-5 text-white/60" />
-              )}
+              <Lock className="w-4 h-4" />
             </IconButton>
           </div>
         </div>
-
-        {/* Mobile Navigation */}
-        {mobileMenuOpen && (
-          <div id="subboost-mobile-navigation" className="md:hidden border-t border-white/10 py-4">
-            <nav className="flex flex-col gap-1">
-              {visibleNavItems.map((item) => {
-                const isActive = isNavItemActive(pathname, item.href);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setMobileMenuOpen(false)}
-                    className={cn(
-                      "flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-colors",
-                      isActive
-                        ? "text-white bg-white/5"
-                        : "text-white/60 hover:text-white hover:bg-white/5"
-                    )}
-                  >
-                    <item.icon className="w-5 h-5" />
-                    {item.label}
-                  </Link>
-                );
-              })}
-              {visiblePrivilegedItem && (
-                <Link
-                  href={visiblePrivilegedItem.href}
-                  onClick={() => setMobileMenuOpen(false)}
-                  className={cn(
-                    "flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-colors",
-                    isNavItemActive(pathname, visiblePrivilegedItem.href)
-                      ? "text-indigo-400 bg-indigo-500/10"
-                      : "text-indigo-400/70 hover:text-indigo-400 hover:bg-white/5"
-                  )}
-                >
-                  <Shield className="w-5 h-5" />
-                  {visiblePrivilegedItem.label}
-                </Link>
-              )}
-              {!user && (
-                <Link
-                  href="/login"
-                  onClick={() => {
-                    captureAuthConfigHandoff(useConfigStore.getState());
-                    setMobileMenuOpen(false);
-                  }}
-                  className="flex items-center gap-3 px-4 py-3 rounded-lg text-sm text-indigo-400 hover:text-indigo-300 hover:bg-white/5 transition-colors"
-                >
-                  <LogIn className="w-5 h-5" />
-                  登录
-                </Link>
-              )}
-            </nav>
-          </div>
-        )}
       </div>
     </header>
   );

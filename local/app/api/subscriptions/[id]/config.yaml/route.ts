@@ -1,5 +1,5 @@
 import { apiError } from "@local/lib/http";
-import { generateSubscriptionYaml } from "@local/lib/subscription-service";
+import { generateSubscriptionContent } from "@local/lib/subscription-service";
 import { buildSubscriptionResponseHeaders } from "@subboost/server-core/subscription";
 import {
   consumeLocalRateLimit,
@@ -31,14 +31,17 @@ export async function GET(request: Request, { params }: RouteContext) {
   if (!tokenLimit.allowed) {
     return localRateLimitResponse("Too many subscription requests. Try again later.", tokenLimit.retryAfterSeconds);
   }
-  const result = await generateSubscriptionYaml(token);
-  if (!result) return apiError("Subscription YAML not found.", "NOT_FOUND", 404);
-  return new Response(result.yaml, {
-    headers: buildSubscriptionResponseHeaders(result.name, result.subscriptionInfo, {
-      cacheControl: "no-store",
-      cacheExpirySeconds: result.cacheExpirySeconds,
-      autoUpdateIntervalSeconds: result.autoUpdateIntervalSeconds,
-      isAdmin: result.isAdmin,
-    }),
+  const url = new URL(request.url);
+  const typeParam = (url.searchParams.get("type") || url.searchParams.get("format") || "clash").toLowerCase();
+  const format = typeParam === "v2rayn" ? "v2rayn" : typeParam === "base64" || typeParam === "plaintext" ? "base64" : "clash";
+  const result = await generateSubscriptionContent(token, format);
+  if (!result) return apiError("Subscription not found.", "NOT_FOUND", 404);
+  const headers = buildSubscriptionResponseHeaders(result.name, result.subscriptionInfo, {
+    cacheControl: "no-store",
+    cacheExpirySeconds: result.cacheExpirySeconds,
+    autoUpdateIntervalSeconds: result.autoUpdateIntervalSeconds,
+    isAdmin: result.isAdmin,
   });
+  headers.set("Content-Type", result.contentType);
+  return new Response(result.content, { headers });
 }

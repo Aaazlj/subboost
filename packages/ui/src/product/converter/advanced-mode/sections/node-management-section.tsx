@@ -9,6 +9,7 @@ import { Input } from "@subboost/ui/components/ui/input";
 import { SwitchField } from "@subboost/ui/components/ui/switch-field";
 import { toast } from "@subboost/ui/components/ui/toaster";
 import { DEFAULT_NODE_NAME_TEMPLATE } from "@subboost/core/node-name-template";
+import { batchFormatNodesWithRegion } from "@subboost/core/node-region-formatter";
 import {
   DEFAULT_NODE_NAME_FILTER_CONFIG,
   resolveNodeNameFilter,
@@ -507,6 +508,27 @@ export function NodeManagementSection({
                   density="compact"
                 />
               </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  const formatted = batchFormatNodesWithRegion(effectiveNodes);
+                  const renames = formatted
+                    .filter((item) => item.oldName !== item.newName)
+                    .map((item) => ({ oldName: item.oldName, newName: item.newName }));
+                  if (renames.length === 0) {
+                    toast({ title: "节点名称已是规范国家格式" });
+                    return;
+                  }
+                  bulkRenameNodes(renames);
+                  toast({ title: `已成功为 ${renames.length} 个节点添加国家图标与名称` });
+                }}
+                disabled={effectiveNodes.length === 0}
+                className="h-7 shrink-0 px-2 text-xs gap-1 border-indigo-500/30 bg-indigo-500/10 text-indigo-200 hover:bg-indigo-500/20"
+                title="自动识别节点区域并加上国家国旗 Emoji 与国家名称"
+              >
+                🌍 识别国家重命名
+              </Button>
               <Button
                 variant="secondary"
                 size="sm"

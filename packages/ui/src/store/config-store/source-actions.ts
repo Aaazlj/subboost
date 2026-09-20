@@ -6,6 +6,7 @@ import {
   mergeParsedSourceNodes,
   prepareSourceParsedNodes,
 } from "@subboost/core/subscription/source-node-refresh";
+import { batchFormatNodesWithRegion } from "@subboost/core/node-region-formatter";
 import {
   hasSubscriptionUserInfo,
   parseSubscriptionUserInfo,
@@ -612,18 +613,23 @@ export function createSourceActions(set: SetState, get: GetState, setAndGenerate
         return;
       }
 
+      const regionFormatted = batchFormatNodesWithRegion(uniqueNamedNodes);
+      const formattedNodes = regionFormatted.map(({ oldName, newName, node }) => {
+        const record = node as unknown as Record<string, unknown>;
+        const origin =
+          typeof record["_originName"] === "string" && record["_originName"].trim()
+            ? String(record["_originName"])
+            : oldName;
+        return {
+          ...node,
+          name: newName,
+          _originName: origin,
+        } as ParsedNode;
+      });
+
       setAndGenerateConfig((state) => {
         const deleted = new Set(state.deletedNodeNames);
-        const normalizedCandidates = uniqueNamedNodes.map((node) => {
-          const record = node as unknown as Record<string, unknown>;
-          const origin =
-            typeof record["_originName"] === "string" && record["_originName"].trim()
-              ? String(record["_originName"])
-              : node.name;
-          return origin === record["_originName"]
-            ? node
-            : ({ ...record, _originName: origin } as unknown as ParsedNode);
-        });
+        const normalizedCandidates = formattedNodes;
         const originCounts = new Map<string, number>();
         for (const node of normalizedCandidates) {
           const origin = String((node as unknown as Record<string, unknown>)["_originName"] ?? node.name);

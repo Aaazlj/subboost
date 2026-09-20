@@ -3,6 +3,7 @@
  */
 
 import { create } from "zustand";
+import { withBasePath } from "@subboost/ui/lib/base-path";
 
 export interface UserQuota {
   maxSubscriptions: number;
@@ -68,7 +69,7 @@ export const useUserStore = create<UserState>((set) => ({
 
     fetchUserPromise = (async () => {
       try {
-        const response = await fetch("/api/auth/me", { cache: "no-store" });
+        const response = await fetch(withBasePath("/api/auth/me"), { cache: "no-store" });
         if (!response.ok) {
           set({ user: null, error: `请求失败 (HTTP ${response.status})`, isLoading: false });
           return;
@@ -91,7 +92,7 @@ export const useUserStore = create<UserState>((set) => ({
 
   logout: async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch(withBasePath("/api/auth/logout"), { method: "POST" });
       set({ user: null });
     } catch (error) {
       console.error("Logout error:", error);

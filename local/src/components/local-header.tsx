@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Header, type HeaderBrandBadge } from "@subboost/ui/components/layout/header";
+import { withBasePath } from "@subboost/ui/lib/base-path";
 
 type LatestReleaseStatus = {
   hasUpdate?: unknown;
@@ -39,7 +40,7 @@ export function LocalHeader() {
 
     void (async () => {
       try {
-        const response = await fetch("/api/releases/latest", {
+        const response = await fetch(withBasePath("/api/releases/latest"), {
           cache: "no-store",
           headers: { "Cache-Control": "no-cache" },
           signal: controller.signal,

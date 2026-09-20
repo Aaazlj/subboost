@@ -164,6 +164,27 @@ export function SourcesSection() {
             <Badge variant="success">{nodeCount} 个节点已解析</Badge>
           </div>
         )}
+
+        <div className="pt-2 border-t border-white/5 flex items-center justify-between text-xs text-white/50 flex-shrink-0">
+          <span>已有生成的订阅？</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs text-indigo-400 hover:text-indigo-300 hover:bg-white/5"
+            onClick={() => {
+              const input = window.prompt("请输入生成的订阅链接或 Token：");
+              if (!input || !input.trim()) return;
+              const match = input.match(/\/api\/subscriptions\/([^/?#]+)/) || input.match(/editSubscriptionId=([^&]+)/);
+              const token = match ? match[1] : input.trim();
+              if (token) {
+                window.location.href = `/?editSubscriptionId=${encodeURIComponent(token)}`;
+              }
+            }}
+          >
+            加载并二次编辑
+          </Button>
+        </div>
       </div>
 
       <SourceEditorDialog

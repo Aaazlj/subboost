@@ -31,20 +31,21 @@ export async function POST(request: Request) {
 
   const username = getStringField(body, "username");
   const password = getStringField(body, "password");
-  const usernameLimitKey = hashLocalRateLimitKey(username.toLowerCase() || "missing");
+  const rateLimitIdentifier = username ? username.toLowerCase() : "panel-admin";
+  const usernameLimitKey = hashLocalRateLimitKey(rateLimitIdentifier);
   const usernameLimit = consumeLocalRateLimit("auth-login-username", usernameLimitKey, {
-    limit: 8,
+    limit: 10,
     windowMs: LOGIN_WINDOW_MS,
   });
   if (!usernameLimit.allowed) {
-    return localRateLimitResponse("Too many login attempts. Try again later.", usernameLimit.retryAfterSeconds);
+    return localRateLimitResponse("密码错误次数过多，请稍后再试", usernameLimit.retryAfterSeconds);
   }
   const admin = username
     ? await prisma.localAdmin.findUnique({ where: { username }, select: { id: true, username: true, passwordHash: true } })
-    : null;
-  const valid = admin ? await bcrypt.compare(password, admin.passwordHash) : false;
+    : await prisma.localAdmin.findFirst({ select: { id: true, username: true, passwordHash: true } });
+  const valid = admin && password ? await bcrypt.compare(password, admin.passwordHash) : false;
   if (!admin || !valid) {
-    return apiError("Invalid username or password.", "UNAUTHORIZED", 401);
+    return apiError("面板密码错误", "UNAUTHORIZED", 401);
   }
 
   resetLocalRateLimit("auth-login-username", usernameLimitKey);

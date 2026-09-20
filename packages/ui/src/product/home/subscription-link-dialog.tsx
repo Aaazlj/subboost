@@ -1,6 +1,6 @@
 "use client";
 
-import type * as React from "react";
+import * as React from "react";
 import { Check, Copy, Link as LinkIcon, Loader2 } from "lucide-react";
 import { Button } from "@subboost/ui/components/ui/button";
 import { FormField } from "@subboost/ui/components/ui/form-field";
@@ -9,6 +9,7 @@ import { Input } from "@subboost/ui/components/ui/input";
 import { Switch } from "@subboost/ui/components/ui/switch";
 import { SwitchField } from "@subboost/ui/components/ui/switch-field";
 import { SmartNodeMatchingHelp } from "@subboost/ui/components/subscription/smart-node-matching-help";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@subboost/ui/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -63,6 +64,7 @@ export function SubscriptionLinkDialog({
 }: Props) {
   const close = () => onOpenChange(false);
   const minAutoUpdateLabel = getAutoUpdateIntervalPolicyMinLabel(autoUpdatePolicy);
+  const [copiedFormat, setCopiedFormat] = React.useState<string | null>(null);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -154,31 +156,58 @@ export function SubscriptionLinkDialog({
           </div>
         ) : (
           <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <p className="text-sm font-medium">订阅链接</p>
-              <div className="flex gap-2">
-                <Input value={subscriptionUrl} readOnly className="font-mono text-xs" />
-                <IconButton
-                  label={copied ? "已复制订阅链接" : "复制订阅链接"}
-                  variant="outline"
-                  onClick={handleCopyUrl}
-                  className="flex-shrink-0"
-                >
-                  {copied ? (
-                    <Check className="h-4 w-4 text-green-400" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </IconButton>
+            <Tabs defaultValue="clash" className="w-full">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-medium text-white/90">订阅类型</p>
+                <TabsList className="h-8 bg-white/5 border border-white/10">
+                  <TabsTrigger value="clash" className="text-xs px-2.5 h-6">Clash</TabsTrigger>
+                  <TabsTrigger value="v2rayn" className="text-xs px-2.5 h-6">v2rayN</TabsTrigger>
+                  <TabsTrigger value="base64" className="text-xs px-2.5 h-6">通用订阅</TabsTrigger>
+                </TabsList>
               </div>
-            </div>
+
+              {(["clash", "v2rayn", "base64"] as const).map((fmt) => {
+                const sep = subscriptionUrl.includes("?") ? "&" : "?";
+                const fmtUrl = fmt === "clash" ? subscriptionUrl : `${subscriptionUrl}${sep}type=${fmt}`;
+                const isCopied = copiedFormat === fmt;
+
+                return (
+                  <TabsContent key={fmt} value={fmt} className="mt-2 space-y-2">
+                    <div className="flex gap-2">
+                      <Input value={fmtUrl} readOnly className="font-mono text-xs" />
+                      <IconButton
+                        label={isCopied ? "已复制" : "复制链接"}
+                        variant="outline"
+                        onClick={async () => {
+                          await navigator.clipboard.writeText(fmtUrl);
+                          setCopiedFormat(fmt);
+                          setTimeout(() => setCopiedFormat(null), 2000);
+                        }}
+                        className="flex-shrink-0"
+                      >
+                        {isCopied ? (
+                          <Check className="h-4 w-4 text-green-400" />
+                        ) : (
+                          <Copy className="h-4 w-4" />
+                        )}
+                      </IconButton>
+                    </div>
+                    <p className="text-xs text-white/40">
+                      {fmt === "clash" && "支持 Clash Verge、Clash Meta、Mihomo 等客户端"}
+                      {fmt === "v2rayn" && "支持 v2rayN、v2rayNG 等 Base64 订阅客户端"}
+                      {fmt === "base64" && "通用单节点明文链接列表，支持直接导入"}
+                    </p>
+                  </TabsContent>
+                );
+              })}
+            </Tabs>
 
             <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30 text-sm">
               <p className="text-green-200 font-medium mb-1">
                 ✅ {isEditingExistingSubscription ? "更新成功" : "创建成功"}
               </p>
               <p className="text-xs text-green-200/70">
-                {isEditingExistingSubscription ? "订阅链接保持不变，可在仪表盘查看" : "您可以在仪表盘中管理所有订阅"}
+                请保存好上方订阅链接，可在支持的客户端直接导入使用。
               </p>
             </div>
           </div>

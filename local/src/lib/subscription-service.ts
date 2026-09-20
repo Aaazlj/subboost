@@ -1,5 +1,9 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { generateClashYaml } from "@subboost/core/generator";
+import {
+  exportNodesToPlaintextSubscription,
+  exportNodesToV2rayNSubscription,
+} from "@subboost/core/subscription/node-link-exporter";
 import { buildGenerateOptionsFromConfig, getEffectiveTestOptions } from "@subboost/core/subscription/config-utils";
 import { buildProxyProvidersFromConfig } from "@subboost/core/subscription/proxy-providers";
 import type { SubscriptionResponseInfo } from "@subboost/core/subscription/subscription-response-info";
@@ -430,22 +434,51 @@ export async function refreshSubscription(ownerId: string, id: string) {
   };
 }
 
-export async function generateSubscriptionYaml(token: string): Promise<GeneratedSubscriptionYaml | null> {
+export type GeneratedSubscriptionContent = {
+  content: string;
+  contentType: string;
+  name: string;
+  subscriptionInfo: SubscriptionResponseInfo;
+  cacheExpirySeconds: number;
+  autoUpdateIntervalSeconds: number | null;
+  isAdmin: boolean;
+};
+
+export async function generateSubscriptionContent(
+  token: string,
+  format: "clash" | "v2rayn" | "base64" | "plaintext" = "clash"
+): Promise<GeneratedSubscriptionContent | null> {
   const row = await prisma.subscription.findUnique({ where: { token }, include: { autoUpdateState: true } });
   if (!row) return null;
   const secrets = readSubscriptionSecrets(row);
   const { testUrl, testInterval } = getEffectiveTestOptions(secrets.config);
   const proxyProviders = buildProxyProvidersFromConfig(secrets.config, { testUrl, testInterval });
   if (secrets.nodes.length === 0 && !proxyProviders) return null;
-  const yaml = generateClashYaml(
-    buildGenerateOptionsFromConfig(secrets.config, {
-      nodes: secrets.nodes,
-      proxyProviders,
-    })
-  );
+
+  let content = "";
+  let contentType = "text/plain; charset=utf-8";
+
+  if (format === "v2rayn") {
+    content = exportNodesToV2rayNSubscription(secrets.nodes);
+    contentType = "text/plain; charset=utf-8";
+  } else if (format === "base64" || format === "plaintext") {
+    content = exportNodesToPlaintextSubscription(secrets.nodes);
+    contentType = "text/plain; charset=utf-8";
+  } else {
+    // clash (default)
+    content = generateClashYaml(
+      buildGenerateOptionsFromConfig(secrets.config, {
+        nodes: secrets.nodes,
+        proxyProviders,
+      })
+    );
+    contentType = "text/yaml; charset=utf-8";
+  }
+
   await prisma.subscription.update({ where: { id: row.id }, data: { lastAccessedAt: new Date() } });
   return {
-    yaml,
+    content,
+    contentType,
     name: row.name,
     subscriptionInfo: secrets.subscriptionInfo,
     cacheExpirySeconds: CACHE_TTL_SECONDS,
@@ -453,3 +486,17 @@ export async function generateSubscriptionYaml(token: string): Promise<Generated
     isAdmin: true,
   };
 }
+
+export async function generateSubscriptionYaml(token: string): Promise<GeneratedSubscriptionYaml | null> {
+  const result = await generateSubscriptionContent(token, "clash");
+  if (!result) return null;
+  return {
+    yaml: result.content,
+    name: result.name,
+    subscriptionInfo: result.subscriptionInfo,
+    cacheExpirySeconds: result.cacheExpirySeconds,
+    autoUpdateIntervalSeconds: result.autoUpdateIntervalSeconds,
+    isAdmin: result.isAdmin,
+  };
+}
+

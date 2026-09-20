@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-subboost}
+      POSTGRES_USER: ${POSTGRES_USER:-subboost}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-subboost_secret_pw}
+    volumes:
+      - subboost-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: local/Dockerfile
+      args:
+        BASE_PATH: ${BASE_PATH:-/admin}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${SUBBOOST_PORT:-38921}:3000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://subboost:subboost_secret_pw@db:5432/subboost?schema=public}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      JWT_SECRET: ${JWT_SECRET:-subboost_jwt_secret_token_default_key_2026}
+      CRON_SECRET: ${CRON_SECRET:-subboost_cron_secret_token_default_key_2026}
+      TRUST_PROXY_HEADERS: "true"
+      APP_URL: ${APP_URL:-https://leozai.com/admin}
+      BASE_PATH: ${BASE_PATH:-/admin}
+      NEXT_PUBLIC_BASE_PATH: ${BASE_PATH:-/admin}
+
+  cron:
+    image: curlimages/curl:8.11.1
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    environment:
+      CRON_SECRET: ${CRON_SECRET:-subboost_cron_secret_token_default_key_2026}
+    command:
+      [
+        "sh",
+        "-c",
+        "i=0; while true; do failed=0; if [ $$i -le 0 ]; then echo \"[local-cron] $(date -Iseconds) POST /admin/api/cron/update-rule-index\"; curl -fsS -X POST -H \"Authorization: Bearer $${CRON_SECRET}\" http://app:3000/admin/api/cron/update-rule-index || failed=1; i=10; fi; echo \"[local-cron] $(date -Iseconds) POST /admin/api/cron/update-subscriptions\"; curl -fsS -X POST -H \"Authorization: Bearer $${CRON_SECRET}\" http://app:3000/admin/api/cron/update-subscriptions || failed=1; i=$$((i - 1)); if [ $$failed -ne 0 ]; then echo \"[local-cron] one or more endpoints failed; restarting after delay\" >&2; sleep 30; exit 1; fi; sleep 360; done"
+      ]
+
+volumes:
+  subboost-db-data:

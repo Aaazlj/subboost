@@ -1,12 +1,7 @@
 import type { Metadata } from "next";
 import "@subboost/ui/styles/globals.css";
-import { Footer } from "@subboost/ui/components/layout/footer";
-import { MobileNav } from "@subboost/ui/components/layout/mobile-nav";
-import { ScrollLockStabilizer } from "@subboost/ui/components/layout/scroll-lock-stabilizer";
-import { ConfirmDialogHost } from "@subboost/ui/components/ui/confirm-dialog";
-import { Toaster } from "@subboost/ui/components/ui/toaster";
+import { PanelAuthGuard } from "@subboost/ui/components/auth/panel-auth-guard";
 import { LocalHeader } from "@local/components/local-header";
-import { resolveAppVersionInfo } from "@subboost/server-core/app-version";
 import {
   SUBBOOST_FAVICON_PATH,
   SUBBOOST_ICON_PATH,
@@ -39,18 +34,16 @@ export const viewport = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const { buildVersion } = resolveAppVersionInfo({ env: process.env, cwd: process.cwd() });
-
   return (
     <html lang="zh-CN" className="dark">
       <body className="font-sans">
         <ScrollLockStabilizer />
-        <div className="min-h-screen bg-gradient-radial flex flex-col">
-          <LocalHeader />
-          <main className="flex-1 pb-16 md:pb-0">{children}</main>
-          <Footer mode="local" buildVersion={buildVersion} />
-          <MobileNav mode="local" />
-        </div>
+        <PanelAuthGuard>
+          <div className="min-h-screen bg-gradient-radial flex flex-col">
+            <LocalHeader />
+            <main className="flex-1">{children}</main>
+          </div>
+        </PanelAuthGuard>
         <Toaster />
         <ConfirmDialogHost />
       </body>
