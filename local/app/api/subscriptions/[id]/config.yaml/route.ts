@@ -42,6 +42,6 @@ export async function GET(request: Request, { params }: RouteContext) {
     autoUpdateIntervalSeconds: result.autoUpdateIntervalSeconds,
     isAdmin: result.isAdmin,
   });
-  headers.set("Content-Type", result.contentType);
+  headers["content-type"] = result.contentType;
   return new Response(result.content, { headers });
 }
