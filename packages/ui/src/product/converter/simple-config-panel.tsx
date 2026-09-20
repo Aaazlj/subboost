@@ -223,7 +223,7 @@ export function SimpleConfigPanel() {
           ];
 
       setSources(newSources);
-      await parseMultipleSources();
+      await parseMultipleSources(newSources);
 
       // 导入后，自动执行智能规整命名
       const currentNodes = useConfigStore.getState().nodes;
