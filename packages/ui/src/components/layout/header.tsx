@@ -11,6 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@subboost/ui/lib/utils";
+import { withBasePath } from "@subboost/ui/lib/base-path";
 import { IconButton } from "@subboost/ui/components/ui/icon-button";
 import type { AccountMenuItem } from "@subboost/ui/components/auth/user-menu";
 import { useUserStore } from "@subboost/ui/store/user-store";
@@ -181,7 +182,7 @@ export function Header({
               variant="ghost"
               className="rounded-lg p-2 text-white/60 hover:text-white hover:bg-white/5"
               onClick={async () => {
-                await fetch("/api/auth/logout", { method: "POST" });
+                await fetch(withBasePath("/api/auth/logout"), { method: "POST" });
                 window.location.reload();
               }}
             >
