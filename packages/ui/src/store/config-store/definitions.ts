@@ -70,6 +70,8 @@ export interface SubscriptionSource {
   // 上一次成功导入时使用的标签/模板（用于判断是否为“用户手动改名”）
   lastParsedTag?: string;
   lastParsedNameTemplate?: string;
+  // 该订阅来源的厂商标记（生成节点名时作为 [厂商] 后缀）
+  vendor?: string;
   // 用于区分不同机场/来源的标签（不直接参与匹配，仅用于生成节点显示名）
   tag?: string;
   // 节点命名模板：支持 {tag} / {name}

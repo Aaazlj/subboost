@@ -31,7 +31,7 @@ import { confirmDialog as confirm } from "@subboost/ui/components/ui/confirm-dia
 import { useToast } from "@subboost/ui/components/ui/toaster";
 import { withBasePath } from "@subboost/ui/lib/base-path";
 import { useConfigStore } from "@subboost/ui/store/config-store";
-import { batchFormatNodesWithRegion, detectNodeRegion } from "@subboost/core/node-region-formatter";
+import { batchFormatNodesWithRegion, regionFromGeo, resolveNodeRegion } from "@subboost/core/node-region-formatter";
 import type { ParsedNode } from "@subboost/core/types/node";
 import { cn } from "@subboost/ui/lib/utils";
 
@@ -42,6 +42,68 @@ type SubscriptionItem = {
   autoUpdateInterval?: number | null;
   updatedAt?: string;
 };
+
+/** 一行一个订阅：链接 + 该订阅的厂商标记 */
+type SourceRow = {
+  id: string;
+  url: string;
+  vendor: string;
+};
+
+const COMMON_VENDORS = [
+  "阿里云",
+  "腾讯云",
+  "华为云",
+  "谷歌云",
+  "AWS",
+  "甲骨文",
+  "微软云",
+  "搬瓦工",
+  "Cloudflare",
+  "Vultr",
+  "DigitalOcean",
+  "IPLC",
+  "IEPL",
+  "BGP",
+  "CN2",
+];
+
+function createRowId(): string {
+  return `row-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createEmptyRow(): SourceRow {
+  return { id: createRowId(), url: "", vendor: "" };
+}
+
+function readSourceIds(node: ParsedNode): string[] {
+  const raw = (node as unknown as Record<string, unknown>)["_sourceIds"];
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => String(item));
+}
+
+function buildVendorBySourceId(
+  sources: Array<{ id: string; vendor?: string }>
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const source of sources) {
+    const vendor = typeof source.vendor === "string" ? source.vendor.trim() : "";
+    if (vendor) map.set(source.id, vendor);
+  }
+  return map;
+}
+
+/** 节点所属订阅若设置了厂商，则优先使用该厂商 */
+function makeVendorResolver(sources: Array<{ id: string; vendor?: string }>) {
+  const vendorBySourceId = buildVendorBySourceId(sources);
+  return (node: ParsedNode): string | undefined => {
+    for (const id of readSourceIds(node)) {
+      const vendor = vendorBySourceId.get(id);
+      if (vendor) return vendor;
+    }
+    return undefined;
+  };
+}
 
 export function SimpleConfigPanel() {
   const { toast } = useToast();
@@ -64,9 +126,20 @@ export function SimpleConfigPanel() {
 
   // 表单状态
   const [configName, setConfigName] = React.useState("我的主力配置");
-  const [inputContent, setInputContent] = React.useState("");
+  const [sourceRows, setSourceRows] = React.useState<SourceRow[]>([createEmptyRow()]);
+  const [manualContent, setManualContent] = React.useState("");
   const [isParsing, setIsParsing] = React.useState(false);
+  const [isRenaming, setIsRenaming] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
+
+  // 订阅行编辑
+  const updateSourceRow = (id: string, patch: Partial<SourceRow>) => {
+    setSourceRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  };
+
+  const removeSourceRow = (id: string) => {
+    setSourceRows((prev) => (prev.length <= 1 ? [createEmptyRow()] : prev.filter((row) => row.id !== id)));
+  };
 
   // 节点列表交互状态
   const [searchKeyword, setSearchKeyword] = React.useState("");
@@ -110,11 +183,22 @@ export function SimpleConfigPanel() {
         setCurrentSubId(sub.id);
         setCurrentSubToken(sub.token);
         setConfigName(sub.name || "未命名配置");
-        if (Array.isArray(sub.urls) && sub.urls.length > 0) {
-          setInputContent(sub.urls.join("\n"));
-        } else {
-          setInputContent("");
-        }
+        const savedVendors =
+          sub.config && typeof sub.config === "object" && !Array.isArray(sub.config)
+            ? ((sub.config as Record<string, unknown>).sourceVendors as Record<string, unknown> | undefined)
+            : undefined;
+        const urls = Array.isArray(sub.urls) ? sub.urls.filter((u: unknown) => typeof u === "string") : [];
+        setSourceRows(
+          urls.length > 0
+            ? urls.map((url: string) => ({
+                id: createRowId(),
+                url,
+                vendor:
+                  savedVendors && typeof savedVendors[url] === "string" ? String(savedVendors[url]) : "",
+              }))
+            : [createEmptyRow()]
+        );
+        setManualContent("");
         if (Array.isArray(sub.nodes)) {
           useConfigStore.setState({
             nodes: sub.nodes,
@@ -150,7 +234,8 @@ export function SimpleConfigPanel() {
     setCurrentSubId(null);
     setCurrentSubToken(null);
     setConfigName(`新配置 ${new Date().toLocaleDateString("zh-CN")}`);
-    setInputContent("");
+    setSourceRows([createEmptyRow()]);
+    setManualContent("");
     clearNodes();
     toast({
       title: "已开启新配置",
@@ -178,7 +263,8 @@ export function SimpleConfigPanel() {
       setCurrentSubId(null);
       setCurrentSubToken(null);
       clearNodes();
-      setInputContent("");
+      setSourceRows([createEmptyRow()]);
+      setManualContent("");
       await fetchSubscriptions();
     } catch (err: unknown) {
       toast({
@@ -189,13 +275,17 @@ export function SimpleConfigPanel() {
     }
   };
 
-  // 解析并导入源
+  // 解析并导入源：一行一个订阅，每个订阅可单独设置厂商
   const handleImport = async () => {
-    const trimmed = inputContent.trim();
-    if (!trimmed) {
+    const rows = sourceRows
+      .map((row) => ({ ...row, url: row.url.trim(), vendor: row.vendor.trim() }))
+      .filter((row) => row.url !== "");
+    const manual = manualContent.trim();
+
+    if (rows.length === 0 && manual === "") {
       toast({
         title: "请输入订阅或节点内容",
-        description: "支持粘贴订阅链接、单节点链接（vmess/vless/hysteria2/ss等）或 YAML 内容。",
+        description: "每行填写一个订阅链接并可选设置厂商，或在下方粘贴节点/YAML 内容。",
         variant: "destructive",
       });
       return;
@@ -203,47 +293,37 @@ export function SimpleConfigPanel() {
 
     setIsParsing(true);
     try {
-      const lines = trimmed.split("\n").map((l) => l.trim()).filter(Boolean);
-      const isPureUrls = lines.every((line) => line.startsWith("http://") || line.startsWith("https://"));
+      const newSources: Array<{ id: string; type: "url" | "yaml" | "nodes"; content: string; tag: string; vendor?: string }> = [];
 
-      const newSources = isPureUrls
-        ? lines.map((url, idx) => ({
-            id: `src-${Date.now()}-${idx}`,
-            type: "url" as const,
-            content: url,
-            tag: `源 ${idx + 1}`,
-          }))
-        : [
-            {
-              id: `src-${Date.now()}-0`,
-              type: trimmed.includes("proxies:") ? ("yaml" as const) : ("url" as const),
-              content: trimmed,
-              tag: "混合源",
-            },
-          ];
+      rows.forEach((row, idx) => {
+        newSources.push({
+          id: `src-${Date.now()}-${idx}`,
+          type: "url",
+          content: row.url,
+          tag: row.vendor || `源 ${idx + 1}`,
+          ...(row.vendor ? { vendor: row.vendor } : {}),
+        });
+      });
+
+      if (manual !== "") {
+        const looksLikeUrl = /^https?:\/\//i.test(manual);
+        newSources.push({
+          id: `src-${Date.now()}-manual`,
+          type: looksLikeUrl ? "url" : manual.includes("proxies:") ? "yaml" : "nodes",
+          content: manual,
+          tag: "手动内容",
+        });
+      }
 
       setSources(newSources);
       await parseMultipleSources(newSources);
 
-      // 导入后，自动执行智能规整命名
-      const currentNodes = useConfigStore.getState().nodes;
-      if (currentNodes.length > 0) {
-        const formatted = batchFormatNodesWithRegion(currentNodes);
-        const updated = formatted.map(({ newName, node, oldName }) => {
-          const rec = node as unknown as Record<string, unknown>;
-          return {
-            ...node,
-            name: newName,
-            _originName: rec["_originName"] || oldName,
-          } as ParsedNode;
-        });
-        useConfigStore.setState({ nodes: updated });
-        generateConfig();
-      }
+      // 导入后，按「订阅配置的厂商」统一规整命名（国家优先使用 GeoIP 结果）
+      await applySmartRename(newSources);
 
       toast({
         title: "导入并识别完成",
-        description: `已成功解析并按国家、协议、厂商格式化了 ${useConfigStore.getState().nodes.length} 个节点。`,
+        description: `已成功解析并格式化了 ${useConfigStore.getState().nodes.length} 个节点。`,
       });
     } catch (err: unknown) {
       toast({
@@ -256,27 +336,112 @@ export function SimpleConfigPanel() {
     }
   };
 
-  // 一键重新格式化命名
-  const handleReformatNames = () => {
-    if (nodes.length === 0) {
-      toast({ title: "当前无节点", description: "请先导入节点再进行重命名。" });
-      return;
-    }
-    const formatted = batchFormatNodesWithRegion(nodes);
+  // 拉取节点落地国家（GeoIP）：节点名里通常不含国家信息，需要用服务器 IP 判断
+  const fetchGeoByHost = React.useCallback(
+    async (hosts: string[]): Promise<Map<string, { countryCode: string; country: string }>> => {
+      const geoByHost = new Map<string, { countryCode: string; country: string }>();
+      if (hosts.length === 0) return geoByHost;
+      try {
+        const res = await fetch(withBasePath("/api/geoip"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hosts }),
+        });
+        if (!res.ok) return geoByHost;
+        const data = (await res.json()) as { results?: unknown };
+        if (!Array.isArray(data.results)) return geoByHost;
+        for (const item of data.results) {
+          if (!item || typeof item !== "object") continue;
+          const record = item as Record<string, unknown>;
+          const host = typeof record.host === "string" ? record.host.trim().toLowerCase() : "";
+          const countryCode = typeof record.countryCode === "string" ? record.countryCode.trim() : "";
+          if (!host || !countryCode) continue;
+          geoByHost.set(host, {
+            countryCode: countryCode.toUpperCase(),
+            country: typeof record.country === "string" ? record.country : "",
+          });
+        }
+      } catch {
+        // GeoIP 失败时静默降级为名称识别
+      }
+      return geoByHost;
+    },
+    []
+  );
+
+  /**
+   * 智能重命名：GeoIP 识别落地国家 + 订阅厂商 + 协议 + 序号
+   */
+  const applySmartRename = async (
+    sourceList?: Array<{ id: string; vendor?: string }>
+  ): Promise<void> => {
+    const currentNodes = useConfigStore.getState().nodes;
+    if (currentNodes.length === 0) return;
+
+    const activeSources = sourceList ?? sources;
+    const vendorResolver = makeVendorResolver(activeSources);
+
+    const hosts = Array.from(
+      new Set(
+        currentNodes
+          .map((node) => (typeof node.server === "string" ? node.server.trim().toLowerCase() : ""))
+          .filter((host) => host !== "")
+      )
+    );
+    const geoByHost = await fetchGeoByHost(hosts);
+
+    const formatted = batchFormatNodesWithRegion(currentNodes, {
+      regionResolver: (node) => {
+        const host = typeof node.server === "string" ? node.server.trim().toLowerCase() : "";
+        const geo = host ? geoByHost.get(host) : undefined;
+        return geo ? regionFromGeo(geo.countryCode, geo.country) : undefined;
+      },
+      vendorResolver,
+    });
+
     const updated = formatted.map(({ newName, node, oldName }) => {
       const rec = node as unknown as Record<string, unknown>;
+      const host = typeof node.server === "string" ? node.server.trim().toLowerCase() : "";
+      const geo = host ? geoByHost.get(host) : undefined;
       return {
         ...node,
         name: newName,
         _originName: rec["_originName"] || oldName,
+        ...(geo
+          ? { _geoCountry: geo.countryCode.toUpperCase(), _geoCountryName: geo.country }
+          : {}),
       } as ParsedNode;
     });
+
     useConfigStore.setState({ nodes: updated });
     generateConfig();
-    toast({
-      title: "节点已全部重新识别重命名",
-      description: `格式如：${updated[0]?.name ?? "🇺🇸美国-hysteria2-01[阿里云]"}`,
-    });
+    return;
+  };
+
+  // 一键重新格式化命名（含 GeoIP 国家识别）
+  const handleReformatNames = async () => {
+    if (nodes.length === 0) {
+      toast({ title: "当前无节点", description: "请先导入节点再进行重命名。" });
+      return;
+    }
+    setIsRenaming(true);
+    try {
+      await applySmartRename();
+      const renamed = useConfigStore.getState().nodes;
+      const geoCount = renamed.filter((node) => {
+        const value = (node as unknown as Record<string, unknown>)["_geoCountry"];
+        return typeof value === "string" && value !== "";
+      }).length;
+      toast({
+        title: "节点已重新识别命名",
+        description:
+          geoCount > 0
+            ? `已通过 GeoIP 识别 ${geoCount}/${renamed.length} 个节点的落地国家，示例：${renamed[0]?.name ?? ""}`
+            : `未能识别落地国家（GeoIP 不可用），已按名称识别，示例：${renamed[0]?.name ?? ""}`,
+      });
+    } finally {
+      setIsRenaming(false);
+    }
   };
 
   // 清空所有节点
@@ -313,7 +478,14 @@ export function SimpleConfigPanel() {
 
     setIsSaving(true);
     try {
-      const urls = sources.map((s) => s.content.trim()).filter(Boolean);
+      const urls = sourceRows.map((row) => row.url.trim()).filter(Boolean);
+      // 订阅 → 厂商 映射，随配置一起保存，下次载入时回填
+      const sourceVendors: Record<string, string> = {};
+      for (const row of sourceRows) {
+        const url = row.url.trim();
+        const vendor = row.vendor.trim();
+        if (url && vendor) sourceVendors[url] = vendor;
+      }
       const isEditing = Boolean(currentSubId);
       const endpoint = isEditing
         ? withBasePath(`/api/subscriptions/${encodeURIComponent(currentSubId!)}`)
@@ -325,9 +497,9 @@ export function SimpleConfigPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: trimmedName,
-          urls: urls.length > 0 ? urls : [inputContent.trim()],
+          urls: urls.length > 0 ? urls : [manualContent.trim()].filter(Boolean),
           nodes,
-          config: {},
+          config: { sourceVendors },
           autoUpdateInterval: 86400, // 默认 24 小时
         }),
       });
@@ -361,11 +533,11 @@ export function SimpleConfigPanel() {
     }
   };
 
-  // 统计国家分布
+  // 统计国家分布（优先使用 GeoIP 结果）
   const regionStats = React.useMemo(() => {
     const map = new Map<string, { label: string; emoji: string; count: number }>();
     for (const node of nodes) {
-      const region = detectNodeRegion(node.name);
+      const region = resolveNodeRegion(node as unknown as Record<string, unknown>);
       const existing = map.get(region.id) ?? { label: region.label, emoji: region.emoji, count: 0 };
       existing.count += 1;
       map.set(region.id, existing);
@@ -377,7 +549,7 @@ export function SimpleConfigPanel() {
   const filteredNodes = React.useMemo(() => {
     return nodes.filter((node) => {
       if (selectedRegionId !== "all") {
-        const region = detectNodeRegion(node.name);
+        const region = resolveNodeRegion(node as unknown as Record<string, unknown>);
         if (region.id !== selectedRegionId) return false;
       }
       if (searchKeyword.trim()) {
@@ -512,28 +684,90 @@ export function SimpleConfigPanel() {
             <CardTitle className="text-sm font-semibold flex items-center justify-between">
               <span className="flex items-center gap-2">
                 <FolderPlus className="h-4 w-4 text-indigo-400" />
-                添加订阅 / 节点 / YAML
+                添加订阅（一行一个）
               </span>
-              <span className="text-xs font-normal text-white/40">支持混合输入</span>
+              <span className="text-xs font-normal text-white/40">可设置厂商</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-4 space-y-4">
-            <div className="space-y-1.5">
-              <Textarea
-                value={inputContent}
-                onChange={(e) => setInputContent(e.target.value)}
-                placeholder={`支持在此输入：\n1. 订阅链接 (如 https://example.com/sub)\n2. 单节点链接 (如 hysteria2://, vmess://, ss://, vless://, trojan://)\n3. Base64 编码的节点集合\n4. Clash YAML 配置代码片段`}
-                className="h-48 resize-none font-mono text-xs bg-white/5 border-white/10 leading-relaxed custom-scrollbar"
-              />
+            {/* 订阅列表：一行一个订阅，可单独设置厂商 */}
+            <datalist id="subboost-vendor-options">
+              {COMMON_VENDORS.map((vendor) => (
+                <option key={vendor} value={vendor} />
+              ))}
+            </datalist>
+
+            <div className="space-y-2">
+              {sourceRows.map((row, idx) => (
+                <div
+                  key={row.id}
+                  className="space-y-1.5 rounded-lg border border-white/5 bg-white/[0.02] p-2"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-4 shrink-0 text-center text-[10px] text-white/30">{idx + 1}</span>
+                    <Input
+                      value={row.url}
+                      onChange={(e) => updateSourceRow(row.id, { url: e.target.value })}
+                      placeholder="订阅链接，如 https://example.com/sub"
+                      aria-label={`第 ${idx + 1} 个订阅链接`}
+                      className="h-8 flex-1 font-mono text-xs bg-white/5 border-white/10"
+                    />
+                    <IconButton
+                      label="移除该订阅"
+                      variant="ghost"
+                      onClick={() => removeSourceRow(row.id)}
+                      className="h-7 w-7 shrink-0 text-white/30 hover:text-rose-400 hover:bg-rose-500/10"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </IconButton>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-4 shrink-0 text-center text-[10px] text-white/30">厂</span>
+                    <Input
+                      value={row.vendor}
+                      list="subboost-vendor-options"
+                      onChange={(e) => updateSourceRow(row.id, { vendor: e.target.value })}
+                      placeholder="厂商（可选，如 阿里云 / AWS）"
+                      aria-label={`第 ${idx + 1} 个订阅的厂商`}
+                      className="h-8 flex-1 text-xs bg-white/5 border-white/10"
+                    />
+                  </div>
+                </div>
+              ))}
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSourceRows((prev) => [...prev, createEmptyRow()])}
+                className="w-full h-8 text-xs border-dashed border-white/10 hover:bg-white/5 text-white/70"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                添加一行订阅
+              </Button>
+
               <p className="text-[11px] text-white/40">
-                可一次性粘贴多行内容，系统将自动识别并去重。
+                每行填写一个订阅链接，厂商会作为 <code className="text-emerald-300">[厂商]</code> 标记写入该订阅导入的全部节点名。
               </p>
+            </div>
+
+            {/* 手动粘贴节点 / YAML */}
+            <div className="space-y-1.5">
+              <p className="text-[11px] text-white/50">或直接粘贴节点链接 / YAML（可选）</p>
+              <Textarea
+                value={manualContent}
+                onChange={(e) => setManualContent(e.target.value)}
+                placeholder={`支持单节点链接（hysteria2://、vmess://、ss://、vless://、trojan://）、Base64 节点集合或 Clash YAML 片段`}
+                className="h-24 resize-none font-mono text-xs bg-white/5 border-white/10 leading-relaxed custom-scrollbar"
+              />
             </div>
 
             <div className="flex flex-col gap-2 pt-1">
               <Button
                 onClick={handleImport}
-                disabled={isParsing || !inputContent.trim()}
+                disabled={
+                  isParsing ||
+                  (sourceRows.every((row) => !row.url.trim()) && !manualContent.trim())
+                }
                 className="w-full h-9 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium"
               >
                 {isParsing ? (
@@ -554,12 +788,16 @@ export function SimpleConfigPanel() {
                   variant="outline"
                   size="sm"
                   onClick={handleReformatNames}
-                  disabled={nodes.length === 0}
+                  disabled={nodes.length === 0 || isRenaming}
                   className="h-8 text-xs border-white/10 hover:bg-white/5 text-white/80"
-                  title="格式形如：🇺🇸美国-hysteria2-01[阿里云]"
+                  title="按节点服务器 IP 识别落地国家：格式形如 🇺🇸美国-hysteria2-01[阿里云]"
                 >
-                  <Globe2 className="h-3.5 w-3.5 mr-1 text-emerald-400" />
-                  智能重命名
+                  {isRenaming ? (
+                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin text-emerald-400" />
+                  ) : (
+                    <Globe2 className="h-3.5 w-3.5 mr-1 text-emerald-400" />
+                  )}
+                  {isRenaming ? "识别国家中..." : "智能重命名"}
                 </Button>
 
                 <Button
@@ -579,10 +817,13 @@ export function SimpleConfigPanel() {
             <div className="rounded-lg bg-white/5 border border-white/5 p-3 space-y-1 text-xs text-white/60">
               <p className="font-medium text-white/80">💡 自动识别规则：</p>
               <p className="text-[11px] leading-relaxed">
-                导入时自动识别国家并附带国旗 Emoji、协议类型、同组序号和云厂商标签，生成如：
+                按节点服务器 IP 做 GeoIP 查询识别落地国家，再拼上国旗 Emoji、协议类型、同组序号和订阅厂商标签，生成如：
                 <code className="block mt-1 p-1 rounded bg-black/40 text-emerald-300 font-mono text-[11px]">
                   🇺🇸美国-hysteria2-01[阿里云]
                 </code>
+                <span className="block mt-1 text-white/40">
+                  节点名里没有国家信息时也能识别；若 GeoIP 服务不可用则回退为按节点名识别。
+                </span>
               </p>
             </div>
           </CardContent>

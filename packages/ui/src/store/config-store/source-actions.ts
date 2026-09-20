@@ -613,7 +613,22 @@ export function createSourceActions(set: SetState, get: GetState, setAndGenerate
         return;
       }
 
-      const regionFormatted = batchFormatNodesWithRegion(uniqueNamedNodes);
+      const vendorBySourceId = new Map<string, string>();
+      for (const source of sources) {
+        const vendor = typeof source.vendor === "string" ? source.vendor.trim() : "";
+        if (vendor) vendorBySourceId.set(source.id, vendor);
+      }
+
+      const regionFormatted = batchFormatNodesWithRegion(uniqueNamedNodes, {
+        vendorResolver: (node) => {
+          const sourceIds = getNodeSourceIds(node);
+          for (const id of sourceIds) {
+            const vendor = vendorBySourceId.get(id);
+            if (vendor) return vendor;
+          }
+          return undefined;
+        },
+      });
       const formattedNodes = regionFormatted.map(({ oldName, newName, node }) => {
         const record = node as unknown as Record<string, unknown>;
         const origin =
