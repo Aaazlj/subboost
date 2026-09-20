@@ -27,7 +27,7 @@ import { Badge } from "@subboost/ui/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@subboost/ui/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@subboost/ui/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@subboost/ui/components/ui/dialog";
-import { confirm } from "@subboost/ui/components/ui/confirm-dialog";
+import { confirmDialog as confirm } from "@subboost/ui/components/ui/confirm-dialog";
 import { useToast } from "@subboost/ui/components/ui/toaster";
 import { withBasePath } from "@subboost/ui/lib/base-path";
 import { useConfigStore } from "@subboost/ui/store/config-store";

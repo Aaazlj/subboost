@@ -84,6 +84,9 @@ export function confirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
   });
 }
 
+export const confirm = confirmDialog;
+
+
 function useConfirmDialog() {
   const [state, setState] = React.useState<State>(memoryState);
 

@@ -3,11 +3,12 @@ WORKDIR /package
 RUN apk add --no-cache openssl
 
 COPY package.json package-lock.json ./
-COPY packages/core packages/core
-COPY packages/server-core packages/server-core
-COPY packages/ui packages/ui
-COPY packages/config packages/config
+COPY packages/core/package.json packages/core/package.json
+COPY packages/server-core/package.json packages/server-core/package.json
+COPY packages/ui/package.json packages/ui/package.json
+COPY packages/config/package.json packages/config/package.json
 COPY local/package.json local/package.json
+
 
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     set -eu; \
