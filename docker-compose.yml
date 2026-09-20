@@ -32,7 +32,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-subboost_jwt_secret_token_default_key_2026}
       CRON_SECRET: ${CRON_SECRET:-subboost_cron_secret_token_default_key_2026}
       TRUST_PROXY_HEADERS: "true"
-      APP_URL: ${APP_URL:-https://leozai.com/admin}
+      APP_URL: ${APP_URL:-https://clash.leozai.com/admin}
       BASE_PATH: ${BASE_PATH:-/admin}
       NEXT_PUBLIC_BASE_PATH: ${BASE_PATH:-/admin}
 
