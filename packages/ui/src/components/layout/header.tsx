@@ -122,7 +122,7 @@ export function Header({
           <div className="flex items-center gap-2">
             <Link href="/" className="group flex items-center gap-2">
               <Image
-                src="/logo.png"
+                src={withBasePath("/logo.png")}
                 alt="SubBoost"
                 width={36}
                 height={36}

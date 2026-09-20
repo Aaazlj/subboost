@@ -14,6 +14,7 @@
     "./json": "./src/json.ts",
     "./mihomo/*": "./src/mihomo/*.ts",
     "./node-name-template": "./src/node-name-template.ts",
+    "./node-region-formatter": "./src/node-region-formatter.ts",
     "./node-identity": "./src/node-identity.ts",
     "./parser": "./src/parser/index.ts",
     "./parser/*": "./src/parser/*.ts",

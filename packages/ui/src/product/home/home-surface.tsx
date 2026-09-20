@@ -195,32 +195,7 @@ function HomeSurfaceInner({ adapter }: Props) {
     generateConfig,
   });
 
-  return (
-    <HomeLayout
-      showAiColumn={showAiColumn}
-      user={user}
-      authChecked={authChecked}
-      editingSubscription={editingSubscription}
-      isLoadingEditingSubscription={isLoadingEditingSubscription}
-      editSubscriptionId={editSubscriptionId}
-      generatedYaml={generatedYaml}
-      generatedYamlError={generatedYamlError}
-      configLoading={configLoading}
-      hasValidSources={hasValidSources}
-      handleGenerate={handleGenerate}
-      handleDownload={handleDownload}
-      subscription={subscription}
-      noticeSlot={adapter?.renderNotice?.({ user, showAiColumn })}
-      renderAnnouncement={adapter?.renderAnnouncement}
-      saveRequirementSlot={adapter?.renderSaveRequirementDialog?.({
-        open: subscription.saveRequirementDialog,
-        onOpenChange: subscription.setSaveRequirementDialog,
-        onAccept: subscription.handleAcceptSaveRequirement,
-      })}
-      templateUploadHref={adapter?.templateUploadHref}
-      onTemplateUploadOpen={adapter?.onTemplateUploadOpen}
-    />
-  );
+  return <HomeLayout />;
 }
 
 export function HomeSurface({ adapter }: Props) {

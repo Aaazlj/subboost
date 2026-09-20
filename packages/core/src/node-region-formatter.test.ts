@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   detectNodeRegion,
+  detectNodeVendor,
   formatNodeNameWithRegion,
   batchFormatNodesWithRegion,
 } from "./node-region-formatter";
@@ -26,30 +27,40 @@ describe("node-region-formatter", () => {
     expect(detectNodeRegion("未知无国家节点").label).toBe("其他");
   });
 
-  it("格式化单个节点名称", () => {
-    const formatted = formatNodeNameWithRegion("HK-Node-BGP", 1);
-    expect(formatted).toBe("🇭🇰 香港 01");
-
-    const custom = formatNodeNameWithRegion("US-Node", 2, "{flag} {region} | {name}");
-    expect(custom).toBe("🇺🇸 美国 | US-Node");
+  it("正确识别厂商与线路", () => {
+    expect(detectNodeVendor("US-01 阿里云")).toBe("[阿里云]");
+    expect(detectNodeVendor("HK-AWS-01")).toBe("[AWS]");
+    expect(detectNodeVendor("JP-Tokyo [搬瓦工] 01")).toBe("[搬瓦工]");
+    expect(detectNodeVendor("普通无厂商节点")).toBe("");
   });
 
-  it("批量为同区域节点顺序编号", () => {
+  it("格式化单个节点名称，符合用户要求的规范如 🇺🇸美国-hysteria2-01[阿里云]", () => {
+    const formatted = formatNodeNameWithRegion("US 阿里云高速", 1, undefined, {
+      type: "hysteria2",
+    });
+    expect(formatted).toBe("🇺🇸美国-hysteria2-01[阿里云]");
+
+    const formattedWithoutVendor = formatNodeNameWithRegion("HK-Node-01", 2, undefined, {
+      type: "vmess",
+    });
+    expect(formattedWithoutVendor).toBe("🇭🇰香港-vmess-02");
+  });
+
+  it("批量为同区域同协议节点顺序编号并识别厂商", () => {
     const nodes = [
-      { name: "HK-01" },
-      { name: "US-01" },
-      { name: "HK-02" },
-      { name: "SG-01" },
-      { name: "US-02" },
+      { name: "US-01 阿里云 hy2", type: "hysteria2" },
+      { name: "US-02 阿里云 hy2", type: "hysteria2" },
+      { name: "HK-01 AWS vmess", type: "vmess" },
+      { name: "JP-01 无厂商 trojan", type: "trojan" },
     ];
 
     const result = batchFormatNodesWithRegion(nodes);
     expect(result.map((r) => r.newName)).toEqual([
-      "🇭🇰 香港 01",
-      "🇺🇸 美国 01",
-      "🇭🇰 香港 02",
-      "🇸🇬 新加坡 01",
-      "🇺🇸 美国 02",
+      "🇺🇸美国-hysteria2-01[阿里云]",
+      "🇺🇸美国-hysteria2-02[阿里云]",
+      "🇭🇰香港-vmess-01[AWS]",
+      "🇯🇵日本-trojan-01",
     ]);
   });
 });
+
