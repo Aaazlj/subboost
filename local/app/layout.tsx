@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "@subboost/ui/styles/globals.css";
 import { PanelAuthGuard } from "@subboost/ui/components/auth/panel-auth-guard";
 import { ScrollLockStabilizer } from "@subboost/ui/components/layout/scroll-lock-stabilizer";
+import { ConfirmDialogHost } from "@subboost/ui/components/ui/confirm-dialog";
+import { Toaster } from "@subboost/ui/components/ui/toaster";
 import { LocalHeader } from "@local/components/local-header";
 import {
   SUBBOOST_FAVICON_PATH,
