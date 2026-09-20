@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import {
   Home,
   Lock,
+  Shield,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@subboost/ui/lib/utils";
