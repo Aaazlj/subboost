@@ -34,19 +34,19 @@ describe("node-region-formatter", () => {
     expect(detectNodeVendor("普通无厂商节点")).toBe("");
   });
 
-  it("格式化单个节点名称，符合用户要求的规范如 🇺🇸美国-hysteria2-01[阿里云]", () => {
+  it("格式化单个节点名称，符合用户要求的规范如 🇺🇸美国-hysteria2[阿里云]", () => {
     const formatted = formatNodeNameWithRegion("US 阿里云高速", 1, undefined, {
       type: "hysteria2",
     });
-    expect(formatted).toBe("🇺🇸美国-hysteria2-01[阿里云]");
+    expect(formatted).toBe("🇺🇸美国-hysteria2[阿里云]");
 
     const formattedWithoutVendor = formatNodeNameWithRegion("HK-Node-01", 2, undefined, {
       type: "vmess",
     });
-    expect(formattedWithoutVendor).toBe("🇭🇰香港-vmess-02");
+    expect(formattedWithoutVendor).toBe("🇭🇰香港-vmess");
   });
 
-  it("批量为同区域同协议节点顺序编号并识别厂商", () => {
+  it("批量为同区域同协议节点识别国家和协议并识别厂商（无序号）", () => {
     const nodes = [
       { name: "US-01 阿里云 hy2", type: "hysteria2" },
       { name: "US-02 阿里云 hy2", type: "hysteria2" },
@@ -56,10 +56,10 @@ describe("node-region-formatter", () => {
 
     const result = batchFormatNodesWithRegion(nodes);
     expect(result.map((r) => r.newName)).toEqual([
-      "🇺🇸美国-hysteria2-01[阿里云]",
-      "🇺🇸美国-hysteria2-02[阿里云]",
-      "🇭🇰香港-vmess-01[AWS]",
-      "🇯🇵日本-trojan-01",
+      "🇺🇸美国-hysteria2[阿里云]",
+      "🇺🇸美国-hysteria2[阿里云]",
+      "🇭🇰香港-vmess[AWS]",
+      "🇯🇵日本-trojan",
     ]);
   });
 });

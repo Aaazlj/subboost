@@ -430,11 +430,11 @@ export function detectNodeTypeFromName(nodeName: string): string {
   return "node";
 }
 
-export const DEFAULT_NODE_NAME_TEMPLATE = "{flag}{region}-{type}-{index}{vendor}";
+export const DEFAULT_NODE_NAME_TEMPLATE = "{flag}{region}-{type}{vendor}";
 
 /**
  * 格式化单个节点名称
- * 默认模板：{flag}{region}-{type}-{index}{vendor} (例如：🇺🇸美国-hysteria2-01[阿里云])
+ * 默认模板：{flag}{region}-{type}{vendor} (例如：🇺🇸美国-hysteria2[阿里云])
  */
 export function formatNodeNameWithRegion(
   nodeName: string,

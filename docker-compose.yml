@@ -27,7 +27,7 @@ services:
     ports:
       - "${SUBBOOST_PORT:-38921}:3000"
     volumes:
-      - ${SUBSCRIPTION_HOST_DIR:-/root/subscription}:/data/subscription
+      - ./data:/data
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://subboost:subboost_secret_pw@db:5432/subboost?schema=public}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
@@ -37,7 +37,7 @@ services:
       APP_URL: ${APP_URL:-https://clash.leozai.com/admin}
       BASE_PATH: ${BASE_PATH:-/admin}
       NEXT_PUBLIC_BASE_PATH: ${BASE_PATH:-/admin}
-      SUBSCRIPTION_OUTPUT_DIR: /data/subscription
+      SUBSCRIPTION_OUTPUT_DIR: /data
 
   cron:
     image: curlimages/curl:8.11.1

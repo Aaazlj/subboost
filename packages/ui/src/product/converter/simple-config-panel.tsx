@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
   Copy,
@@ -12,6 +13,7 @@ import {
   Link as LinkIcon,
   Loader2,
   Plus,
+  RefreshCw,
   Save,
   Search,
   Server,
@@ -50,24 +52,6 @@ type SourceRow = {
   url: string;
   vendor: string;
 };
-
-const COMMON_VENDORS = [
-  "阿里云",
-  "腾讯云",
-  "华为云",
-  "谷歌云",
-  "AWS",
-  "甲骨文",
-  "微软云",
-  "搬瓦工",
-  "Cloudflare",
-  "Vultr",
-  "DigitalOcean",
-  "IPLC",
-  "IEPL",
-  "BGP",
-  "CN2",
-];
 
 function createRowId(): string {
   return `row-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -118,6 +102,9 @@ export function SimpleConfigPanel() {
     renameNode,
     generateConfig,
   } = useConfigStore();
+
+  // 页面模式：list 列表视图 | edit 详情配置视图
+  const [viewMode, setViewMode] = React.useState<"list" | "edit">("list");
 
   // 配置列表状态
   const [subscriptions, setSubscriptions] = React.useState<SubscriptionItem[]>([]);
@@ -173,6 +160,95 @@ export function SimpleConfigPanel() {
   React.useEffect(() => {
     fetchSubscriptions();
   }, [fetchSubscriptions]);
+
+  // 从列表页点击【新建配置】
+  const handleOpenCreate = () => {
+    setCurrentSubId(null);
+    setCurrentSubToken(null);
+    setConfigName(`新配置 ${new Date().toLocaleDateString("zh-CN")}`);
+    setSourceRows([createEmptyRow()]);
+    setManualContent("");
+    clearNodes();
+    setViewMode("edit");
+  };
+
+  // 从列表页点击【编辑详情】
+  const handleOpenEdit = async (id: string) => {
+    await handleSelectSubscription(id);
+    setViewMode("edit");
+  };
+
+  // 从详情页返回列表
+  const handleBackToList = async () => {
+    await fetchSubscriptions();
+    setViewMode("list");
+  };
+
+  // 在列表页直接应用某个配置
+  const handleApplyById = async (id: string, name: string) => {
+    setIsApplying(true);
+    try {
+      const res = await fetch(withBasePath(`/api/subscriptions/${encodeURIComponent(id)}/apply`), {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "应用配置失败");
+      }
+      await fetchSubscriptions();
+      toast({
+        title: "配置已应用",
+        description: `配置「${name}」已成功应用至 clash.leozai.com，主订阅已更新。`,
+      });
+    } catch (err: unknown) {
+      toast({
+        title: "应用失败",
+        description: err instanceof Error ? err.message : "请稍后重试。",
+        variant: "destructive",
+      });
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
+  // 在列表页删除指定配置
+  const handleDeleteById = async (id: string, name: string) => {
+    const confirmed = await confirm({
+      title: "确定删除此配置？",
+      description: `删除后，配置「${name}」对应的订阅链接将永久失效。`,
+      confirmText: "确定删除",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(withBasePath(`/api/subscriptions/${encodeURIComponent(id)}`), {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("删除配置失败");
+      toast({ title: "配置已删除" });
+      if (currentSubId === id) {
+        setCurrentSubId(null);
+        setCurrentSubToken(null);
+        clearNodes();
+      }
+      await fetchSubscriptions();
+    } catch (err: unknown) {
+      toast({
+        title: "删除失败",
+        description: err instanceof Error ? err.message : "请稍后重试",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // 在列表页直接弹窗查看链接
+  const handleOpenLinkDialogForSub = (sub: SubscriptionItem) => {
+    setCurrentSubId(sub.id);
+    setCurrentSubToken(sub.token);
+    setConfigName(sub.name);
+    setLinkDialogOpen(true);
+  };
 
   // 载入特定配置
   const handleSelectSubscription = async (id: string) => {
@@ -268,6 +344,7 @@ export function SimpleConfigPanel() {
       setSourceRows([createEmptyRow()]);
       setManualContent("");
       await fetchSubscriptions();
+      setViewMode("list");
     } catch (err: unknown) {
       toast({
         title: "删除失败",
@@ -610,124 +687,258 @@ export function SimpleConfigPanel() {
 
   return (
     <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      {/* 顶部多配置管理栏 */}
-      <Card className="border-white/10 bg-black/40 backdrop-blur-md">
-        <CardContent className="p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
-          <div className="flex flex-1 items-center gap-3 flex-wrap sm:flex-nowrap">
-            <div className="flex items-center gap-2 text-indigo-400">
-              <Layers className="h-5 w-5" />
-              <span className="font-semibold text-sm whitespace-nowrap">当前配置:</span>
+      {viewMode === "list" ? (
+        /* ========== 列表页视图 ========== */
+        <div className="space-y-6">
+          {/* 列表页顶部 Header */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-white/10 pb-5">
+            <div>
+              <h1 className="text-xl font-bold text-white flex items-center gap-2">
+                <Layers className="h-6 w-6 text-indigo-400" />
+                订阅配置管理
+              </h1>
+              <p className="text-xs text-white/50 mt-1">
+                管理您的所有订阅配置，已应用的配置将实时生效至主订阅链接 (clash.leozai.com)
+              </p>
             </div>
-
-            {/* 配置选择器 */}
-            <div className="relative flex-1 max-w-xs">
-              <select
-                aria-label="选择配置"
-                value={currentSubId || ""}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val) handleSelectSubscription(val);
-                }}
-                className="w-full h-9 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 appearance-none cursor-pointer"
-              >
-                <option value="" disabled className="bg-neutral-900 text-white/50">
-                  {currentSubId ? "选择已有配置..." : "➕ 新建未命名配置"}
-                </option>
-                {subscriptions.map((sub) => (
-                  <option key={sub.id} value={sub.id} className="bg-neutral-900 text-white">
-                    {sub.isPrimary ? `⚡ ${sub.name}` : sub.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-3 top-2.5 h-4 w-4 text-white/40 pointer-events-none" />
-            </div>
-
-            {/* 配置名称快速修改 */}
-            <Input
-              value={configName}
-              onChange={(e) => setConfigName(e.target.value)}
-              placeholder="配置名称"
-              className="h-9 w-44 md:w-56 text-sm bg-white/5 border-white/10"
-            />
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleNewConfig}
-              className="h-9 border-white/10 hover:bg-white/5"
-            >
-              <Plus className="h-4 w-4 mr-1.5" />
-              新建配置
-            </Button>
-
-            {currentSubId && (
+            <div className="flex items-center gap-2.5">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleDeleteConfig}
-                className="h-9 border-rose-500/30 text-rose-300 hover:bg-rose-500/10"
+                onClick={fetchSubscriptions}
+                disabled={isLoadingList}
+                className="h-9 border-white/10 hover:bg-white/5 text-white/80"
               >
-                <Trash2 className="h-4 w-4 mr-1.5" />
-                删除配置
+                <RefreshCw className={cn("h-4 w-4 mr-1.5", isLoadingList && "animate-spin")} />
+                刷新
               </Button>
-            )}
+              <Button
+                onClick={handleOpenCreate}
+                className="h-9 bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20"
+              >
+                <Plus className="h-4 w-4 mr-1.5" />
+                新建配置
+              </Button>
+            </div>
+          </div>
 
-            <Button
-              onClick={handleSaveConfig}
-              disabled={isSaving || nodes.length === 0}
-              className="h-9 bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20"
-            >
-              {isSaving ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-              ) : (
-                <Save className="h-4 w-4 mr-1.5" />
-              )}
-              {currentSubId ? "保存更新" : "保存配置"}
-            </Button>
+          {/* 列表主体 */}
+          {isLoadingList && subscriptions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-white/40">
+              <Loader2 className="h-8 w-8 animate-spin mb-3 text-indigo-400" />
+              <p className="text-sm">正在加载配置列表...</p>
+            </div>
+          ) : subscriptions.length === 0 ? (
+            <Card className="border-white/10 bg-black/30 backdrop-blur-md text-center py-16 px-4">
+              <CardContent className="flex flex-col items-center max-w-sm mx-auto">
+                <Layers className="h-12 w-12 text-white/20 mb-4" />
+                <h3 className="text-base font-semibold text-white/90 mb-1">暂无订阅配置</h3>
+                <p className="text-xs text-white/40 mb-6">
+                  您还没有创建任何订阅配置。点击下方按钮开始导入并生成您的第一个配置。
+                </p>
+                <Button
+                  onClick={handleOpenCreate}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white"
+                >
+                  <Plus className="h-4 w-4 mr-1.5" />
+                  创建第一个配置
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {subscriptions.map((sub) => (
+                <Card
+                  key={sub.id}
+                  className={cn(
+                    "border-white/10 bg-black/40 backdrop-blur-md flex flex-col justify-between transition-all duration-200 hover:border-white/20",
+                    sub.isPrimary && "border-emerald-500/40 shadow-lg shadow-emerald-500/5 bg-emerald-950/10"
+                  )}
+                >
+                  <CardHeader className="pb-3 border-b border-white/5">
+                    <div className="flex items-start justify-between gap-2">
+                      <CardTitle className="text-base font-semibold text-white/90 truncate flex-1" title={sub.name}>
+                        {sub.name}
+                      </CardTitle>
+                      {sub.isPrimary ? (
+                        <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 text-[11px] shrink-0">
+                          ⚡ 已应用主订阅
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="border-white/10 text-white/40 text-[10px] shrink-0">
+                          未应用
+                        </Badge>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="py-3 text-xs text-white/50 space-y-1.5 flex-1">
+                    <div className="flex items-center justify-between">
+                      <span>更新时间：</span>
+                      <span className="font-mono text-white/70">
+                        {sub.updatedAt ? new Date(sub.updatedAt).toLocaleString("zh-CN") : "刚刚"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>支持格式：</span>
+                      <span className="text-white/70">Clash / v2rayN / 通用明文</span>
+                    </div>
+                  </CardContent>
+                  <div className="p-3 border-t border-white/5 flex items-center justify-between gap-2">
+                    <div>
+                      {sub.isPrimary ? (
+                        <span className="text-xs text-emerald-400 font-medium px-2 py-1 bg-emerald-500/10 rounded border border-emerald-500/20">
+                          已应用 ✓
+                        </span>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleApplyById(sub.id, sub.name)}
+                          disabled={isApplying}
+                          className="h-8 text-xs border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                        >
+                          <Zap className="h-3.5 w-3.5 mr-1" />
+                          应用
+                        </Button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleOpenEdit(sub.id)}
+                        className="h-8 text-xs border-white/10 hover:bg-white/5 text-white/80"
+                      >
+                        <Edit2 className="h-3.5 w-3.5 mr-1" />
+                        详情配置
+                      </Button>
+                      <IconButton
+                        label="获取订阅链接"
+                        variant="ghost"
+                        onClick={() => handleOpenLinkDialogForSub(sub)}
+                        className="h-8 w-8 text-indigo-300 hover:bg-indigo-500/10"
+                      >
+                        <LinkIcon className="h-4 w-4" />
+                      </IconButton>
+                      <IconButton
+                        label="删除此配置"
+                        variant="ghost"
+                        onClick={() => handleDeleteById(sub.id, sub.name)}
+                        className="h-8 w-8 text-white/30 hover:text-rose-400 hover:bg-rose-500/10"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </IconButton>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* ========== 详情配置页视图 ========== */
+        <div className="space-y-6">
+          {/* 详情页顶部操作卡片 */}
+          <Card className="border-white/10 bg-black/40 backdrop-blur-md">
+            <CardContent className="p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3 flex-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleBackToList}
+                  className="h-9 border-white/10 hover:bg-white/5 text-white/80 shrink-0"
+                >
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />
+                  返回列表
+                </Button>
 
-            {currentSubId && (
-              (() => {
-                const isApplied = subscriptions.find((s) => s.id === currentSubId)?.isPrimary;
-                return (
+                <div className="flex items-center gap-2 flex-1 max-w-sm">
+                  <Input
+                    value={configName}
+                    onChange={(e) => setConfigName(e.target.value)}
+                    placeholder="配置名称"
+                    className="h-9 text-sm bg-white/5 border-white/10"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNewConfig}
+                  className="h-9 border-white/10 hover:bg-white/5"
+                >
+                  <Plus className="h-4 w-4 mr-1.5" />
+                  清空新建
+                </Button>
+
+                {currentSubId && (
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={handleApplyConfig}
-                    disabled={isApplying}
-                    className={cn(
-                      "h-9",
-                      isApplied
-                        ? "border-emerald-500/50 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20"
-                        : "border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
-                    )}
+                    onClick={handleDeleteConfig}
+                    className="h-9 border-rose-500/30 text-rose-300 hover:bg-rose-500/10"
                   >
-                    {isApplying ? (
-                      <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                    ) : (
-                      <Zap className="h-4 w-4 mr-1.5" />
-                    )}
-                    {isApplied ? "已应用 ✓" : "应用"}
+                    <Trash2 className="h-4 w-4 mr-1.5" />
+                    删除配置
                   </Button>
-                );
-              })()
-            )}
+                )}
 
-            {currentSubToken && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setLinkDialogOpen(true)}
-                className="h-9 border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10"
-              >
-                <LinkIcon className="h-4 w-4 mr-1.5" />
-                订阅链接
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+                <Button
+                  onClick={handleSaveConfig}
+                  disabled={isSaving || nodes.length === 0}
+                  className="h-9 bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20"
+                >
+                  {isSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                  ) : (
+                    <Save className="h-4 w-4 mr-1.5" />
+                  )}
+                  {currentSubId ? "保存更新" : "保存配置"}
+                </Button>
+
+                {currentSubId && (
+                  (() => {
+                    const isApplied = subscriptions.find((s) => s.id === currentSubId)?.isPrimary;
+                    return (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleApplyConfig}
+                        disabled={isApplying}
+                        className={cn(
+                          "h-9",
+                          isApplied
+                            ? "border-emerald-500/50 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20"
+                            : "border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                        )}
+                      >
+                        {isApplying ? (
+                          <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                        ) : (
+                          <Zap className="h-4 w-4 mr-1.5" />
+                        )}
+                        {isApplied ? "已应用 ✓" : "应用"}
+                      </Button>
+                    );
+                  })()
+                )}
+
+                {currentSubToken && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setLinkDialogOpen(true)}
+                    className="h-9 border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10"
+                  >
+                    <LinkIcon className="h-4 w-4 mr-1.5" />
+                    订阅链接
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
       {/* 主体区：上部输入源，下部节点列表 */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -743,13 +954,6 @@ export function SimpleConfigPanel() {
             </CardTitle>
           </CardHeader>
           <CardContent className="p-4 space-y-4">
-            {/* 订阅列表：一行一个订阅，可单独设置厂商 */}
-            <datalist id="subboost-vendor-options">
-              {COMMON_VENDORS.map((vendor) => (
-                <option key={vendor} value={vendor} />
-              ))}
-            </datalist>
-
             <div className="space-y-2">
               {sourceRows.map((row, idx) => (
                 <div
@@ -778,9 +982,8 @@ export function SimpleConfigPanel() {
                     <span className="w-4 shrink-0 text-center text-[10px] text-white/30">厂</span>
                     <Input
                       value={row.vendor}
-                      list="subboost-vendor-options"
                       onChange={(e) => updateSourceRow(row.id, { vendor: e.target.value })}
-                      placeholder="厂商（可选，如 阿里云 / AWS）"
+                      placeholder="厂商（可选，如 阿里云）"
                       aria-label={`第 ${idx + 1} 个订阅的厂商`}
                       className="h-8 flex-1 text-xs bg-white/5 border-white/10"
                     />
@@ -1070,6 +1273,8 @@ export function SimpleConfigPanel() {
           </CardContent>
         </Card>
       </div>
+        </div>
+      )}
 
       {/* 订阅链接展示弹窗（生成三种链接） */}
       <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
