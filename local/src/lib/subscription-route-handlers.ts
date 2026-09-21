@@ -1,6 +1,7 @@
 import { withCurrentAdmin } from "@local/lib/api-auth";
 import { apiError, json, jsonBodyError, LOCAL_JSON_BODY_LIMITS, readJsonBody } from "@local/lib/http";
 import {
+  applySubscription,
   createSubscription,
   deleteSubscription,
   getSubscription,
@@ -72,5 +73,17 @@ export async function refreshSubscriptionResponse(id: string) {
     if (!result) return apiError("Subscription not found.", "NOT_FOUND", 404);
     if (!result.ok) return json(result.response.body, result.response.status);
     return json(result.body);
+  });
+}
+
+export async function applySubscriptionResponse(id: string) {
+  return withCurrentAdmin(async (admin) => {
+    try {
+      const result = await applySubscription(admin.id, id);
+      if (!result) return apiError("Subscription not found.", "NOT_FOUND", 404);
+      return json({ success: true });
+    } catch (error) {
+      return apiError(error instanceof Error ? error.message : "应用配置失败", "BAD_REQUEST", 400);
+    }
   });
 }

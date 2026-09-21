@@ -1,4 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { writeFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { generateClashYaml } from "@subboost/core/generator";
 import {
   exportNodesToPlaintextSubscription,
@@ -500,3 +502,30 @@ export async function generateSubscriptionYaml(token: string): Promise<Generated
   };
 }
 
+const SUBSCRIPTION_OUTPUT_DIR = process.env.SUBSCRIPTION_OUTPUT_DIR || "/data/subscription";
+const SUBSCRIPTION_OUTPUT_FILENAME = "clash-config.yaml";
+
+export async function applySubscription(ownerId: string, id: string): Promise<{ ok: true } | null> {
+  const row = await prisma.subscription.findFirst({
+    where: { id, ownerId },
+    include: { autoUpdateState: true },
+  });
+  if (!row) return null;
+
+  // 生成 clash YAML
+  const result = await generateSubscriptionContent(row.token, "clash");
+  if (!result) throw new Error("无法生成订阅内容，请检查节点是否为空。");
+
+  // 写入文件
+  await mkdir(SUBSCRIPTION_OUTPUT_DIR, { recursive: true });
+  const outputPath = join(SUBSCRIPTION_OUTPUT_DIR, SUBSCRIPTION_OUTPUT_FILENAME);
+  await writeFile(outputPath, result.content, "utf-8");
+
+  // 标记为 isPrimary（取消其他订阅的 isPrimary）
+  await prisma.$transaction([
+    prisma.subscription.updateMany({ where: { ownerId, isPrimary: true }, data: { isPrimary: false } }),
+    prisma.subscription.update({ where: { id: row.id }, data: { isPrimary: true } }),
+  ]);
+
+  return { ok: true };
+}

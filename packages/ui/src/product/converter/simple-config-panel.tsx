@@ -39,6 +39,7 @@ type SubscriptionItem = {
   id: string;
   name: string;
   token: string;
+  isPrimary?: boolean;
   autoUpdateInterval?: number | null;
   updatedAt?: string;
 };
@@ -131,6 +132,7 @@ export function SimpleConfigPanel() {
   const [isParsing, setIsParsing] = React.useState(false);
   const [isRenaming, setIsRenaming] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
+  const [isApplying, setIsApplying] = React.useState(false);
 
   // 订阅行编辑
   const updateSourceRow = (id: string, patch: Partial<SourceRow>) => {
@@ -533,6 +535,30 @@ export function SimpleConfigPanel() {
     }
   };
 
+  const handleApplyConfig = async () => {
+    if (!currentSubId) return;
+    setIsApplying(true);
+    try {
+      const res = await fetch(withBasePath(`/api/subscriptions/${encodeURIComponent(currentSubId)}/apply`), {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "应用配置失败");
+      }
+      await fetchSubscriptions();
+      toast({ title: "配置已应用", description: "clash-config.yaml 已更新，订阅链接即刻生效。" });
+    } catch (err: unknown) {
+      toast({
+        title: "应用失败",
+        description: err instanceof Error ? err.message : "请稍后重试。",
+        variant: "destructive",
+      });
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
   // 统计国家分布（优先使用 GeoIP 结果）
   const regionStats = React.useMemo(() => {
     const map = new Map<string, { label: string; emoji: string; count: number }>();
@@ -609,7 +635,7 @@ export function SimpleConfigPanel() {
                 </option>
                 {subscriptions.map((sub) => (
                   <option key={sub.id} value={sub.id} className="bg-neutral-900 text-white">
-                    {sub.name}
+                    {sub.isPrimary ? `⚡ ${sub.name}` : sub.name}
                   </option>
                 ))}
               </select>
@@ -660,6 +686,33 @@ export function SimpleConfigPanel() {
               )}
               {currentSubId ? "保存更新" : "保存配置"}
             </Button>
+
+            {currentSubId && (
+              (() => {
+                const isApplied = subscriptions.find((s) => s.id === currentSubId)?.isPrimary;
+                return (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleApplyConfig}
+                    disabled={isApplying}
+                    className={cn(
+                      "h-9",
+                      isApplied
+                        ? "border-emerald-500/50 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20"
+                        : "border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                    )}
+                  >
+                    {isApplying ? (
+                      <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                    ) : (
+                      <Zap className="h-4 w-4 mr-1.5" />
+                    )}
+                    {isApplied ? "已应用 ✓" : "应用"}
+                  </Button>
+                );
+              })()
+            )}
 
             {currentSubToken && (
               <Button
