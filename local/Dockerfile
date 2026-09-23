@@ -66,7 +66,7 @@ ENV APP_BUILD_SHA=${APP_BUILD_SHA}
 ENV APP_VERSION=${APP_VERSION}
 ENV APP_VERSION_TOKEN=${APP_VERSION_TOKEN}
 ENV BASE_PATH=${BASE_PATH}
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl openvpn iproute2 python3
 
 COPY --chown=node:node --from=builder /package/local/.next/standalone ./
 COPY --chown=node:node --from=production-deps /package/node_modules ./node_modules
@@ -76,6 +76,5 @@ COPY --chown=node:node --from=builder /package/local/prisma.config.ts local/pris
 COPY --chown=node:node --from=builder /package/local/prisma local/prisma
 
 WORKDIR /app/local
-USER node
 EXPOSE 3000
 CMD ["sh", "-c", "../node_modules/.bin/prisma migrate deploy --schema prisma/schema.prisma && node server.js"]

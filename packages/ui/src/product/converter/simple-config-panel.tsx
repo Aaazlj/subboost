@@ -36,6 +36,7 @@ import { useConfigStore } from "@subboost/ui/store/config-store";
 import { batchFormatNodesWithRegion, regionFromGeo, resolveNodeRegion } from "@subboost/core/node-region-formatter";
 import type { ParsedNode } from "@subboost/core/types/node";
 import { cn } from "@subboost/ui/lib/utils";
+import { ResidentialPoolPanel, type ActiveTunnelItem } from "./residential-pool-panel";
 
 type SubscriptionItem = {
   id: string;
@@ -103,8 +104,15 @@ export function SimpleConfigPanel() {
     generateConfig,
   } = useConfigStore();
 
-  // 页面模式：list 列表视图 | edit 详情配置视图
-  const [viewMode, setViewMode] = React.useState<"list" | "edit">("list");
+  // 页面模式：list 列表视图 | edit 详情配置视图 | residential 住宅节点池视图
+  const [viewMode, setViewMode] = React.useState<"list" | "edit" | "residential">("list");
+
+  // 引入住宅落地节点弹窗状态
+  const [residentialDialogOpen, setResidentialDialogOpen] = React.useState(false);
+  const [activeTunnels, setActiveTunnels] = React.useState<ActiveTunnelItem[]>([]);
+  const [selectedTunnelId, setSelectedTunnelId] = React.useState<string>("");
+  const [selectedDialerProxy, setSelectedDialerProxy] = React.useState<string>("");
+  const [isLoadingActiveTunnels, setIsLoadingActiveTunnels] = React.useState(false);
 
   // 配置列表状态
   const [subscriptions, setSubscriptions] = React.useState<SubscriptionItem[]>([]);
@@ -248,6 +256,86 @@ export function SimpleConfigPanel() {
     setCurrentSubToken(sub.token);
     setConfigName(sub.name);
     setLinkDialogOpen(true);
+  };
+
+  // 打开引入住宅落地节点弹窗并拉取活跃隧道
+  const handleOpenResidentialDialog = async (preselectTunnel?: ActiveTunnelItem) => {
+    setIsLoadingActiveTunnels(true);
+    setResidentialDialogOpen(true);
+    if (!selectedDialerProxy) {
+      const normalNodes = nodes.filter((n) => {
+        const raw = n as unknown as Record<string, unknown>;
+        return !raw["_isResidential"] && !raw["dialer-proxy"];
+      });
+      if (normalNodes.length > 0) {
+        setSelectedDialerProxy(normalNodes[0].name);
+      }
+    }
+    try {
+      const res = await fetch(withBasePath("/api/vpngate/tunnels"), { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.tunnels)) {
+          setActiveTunnels(data.tunnels);
+          if (preselectTunnel) {
+            setSelectedTunnelId(preselectTunnel.id);
+          } else if (data.tunnels.length > 0 && !selectedTunnelId) {
+            setSelectedTunnelId(data.tunnels[0].id);
+          }
+        }
+      }
+    } catch {
+      // 忽略异常
+    } finally {
+      setIsLoadingActiveTunnels(false);
+    }
+  };
+
+  // 确认将住宅落地节点注入当前配置
+  const handleConfirmAddResidentialNode = () => {
+    const tunnel = activeTunnels.find((t) => t.id === selectedTunnelId);
+    if (!tunnel) {
+      toast({ title: "请选择活跃隧道", variant: "destructive" });
+      return;
+    }
+    if (!selectedDialerProxy) {
+      toast({
+        title: "请选择前置中转节点",
+        description: "住宅落地节点必须通过前置中转节点进行 dialer-proxy 拨号。",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const reg = regionFromGeo(tunnel.country, tunnel.country);
+    const baseName = `${reg.emoji}${reg.label}-socks5[住宅IP]`;
+
+    // 避免同名冲突
+    let finalName = baseName;
+    const existingNames = new Set(nodes.map((n) => n.name));
+    let counter = 2;
+    while (existingNames.has(finalName)) {
+      finalName = `${baseName} (${counter++})`;
+    }
+
+    const newNode = {
+      name: finalName,
+      type: "socks5",
+      server: "127.0.0.1",
+      port: tunnel.port,
+      "dialer-proxy": selectedDialerProxy,
+      udp: true,
+      _originName: finalName,
+      _isResidential: true,
+    } as unknown as ParsedNode;
+
+    useConfigStore.setState({ nodes: [...nodes, newNode] });
+    generateConfig();
+    setResidentialDialogOpen(false);
+    toast({
+      title: "已引入住宅落地节点",
+      description: `「${finalName}」已加入节点列表，前置拨号节点为「${selectedDialerProxy}」。`,
+    });
   };
 
   // 载入特定配置
@@ -687,7 +775,50 @@ export function SimpleConfigPanel() {
 
   return (
     <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      {viewMode === "list" ? (
+      {/* 顶部全局主导航 Tab */}
+      <div className="flex items-center justify-between border-b border-white/10 pb-4">
+        <div className="flex items-center gap-2">
+          <Button
+            variant={viewMode !== "residential" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setViewMode("list")}
+            className={cn(
+              "h-9 px-4 text-sm font-medium transition-all",
+              viewMode !== "residential"
+                ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            )}
+          >
+            <Layers className="h-4 w-4 mr-2" />
+            订阅配置管理
+          </Button>
+          <Button
+            variant={viewMode === "residential" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setViewMode("residential")}
+            className={cn(
+              "h-9 px-4 text-sm font-medium transition-all",
+              viewMode === "residential"
+                ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            )}
+          >
+            <Globe2 className="h-4 w-4 mr-2 text-emerald-400" />
+            全球住宅节点池
+          </Button>
+        </div>
+      </div>
+
+      {viewMode === "residential" ? (
+        /* ========== 全球住宅节点池视图 ========== */
+        <ResidentialPoolPanel
+          onBackToConfig={() => setViewMode("list")}
+          onSelectTunnelForConfig={(tunnel) => {
+            setViewMode("edit");
+            handleOpenResidentialDialog(tunnel);
+          }}
+        />
+      ) : viewMode === "list" ? (
         /* ========== 列表页视图 ========== */
         <div className="space-y-6">
           {/* 列表页顶部 Header */}
@@ -1067,6 +1198,16 @@ export function SimpleConfigPanel() {
                   清空节点
                 </Button>
               </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleOpenResidentialDialog()}
+                className="w-full h-8 text-xs border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/15 text-emerald-300 font-medium transition-colors"
+              >
+                <Globe2 className="h-3.5 w-3.5 mr-1.5 text-emerald-400" />
+                🌐 引入住宅落地节点 (dialer-proxy)
+              </Button>
             </div>
 
             {/* 命名格式小提示 */}
@@ -1238,6 +1379,15 @@ export function SimpleConfigPanel() {
                           </span>
                         )}
 
+                        {Boolean((node as unknown as Record<string, unknown>)["dialer-proxy"]) && (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] px-1.5 py-0 font-mono bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+                          >
+                            🔗 落地 (前置: {String((node as unknown as Record<string, unknown>)["dialer-proxy"])})
+                          </Badge>
+                        )}
+
                         <Badge
                           variant="outline"
                           className={cn(
@@ -1357,6 +1507,126 @@ export function SimpleConfigPanel() {
               className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white"
             >
               完成
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 引入住宅落地节点弹窗 */}
+      <Dialog open={residentialDialogOpen} onOpenChange={setResidentialDialogOpen}>
+        <DialogContent className="sm:max-w-lg border-white/10 bg-neutral-900/95 backdrop-blur-xl text-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Globe2 className="h-5 w-5 text-emerald-400" />
+              引入住宅落地节点 (dialer-proxy)
+            </DialogTitle>
+            <DialogDescription className="text-white/60 text-xs">
+              将 VPS 本地守护的 OpenVPN 住宅隧道作为落地出口，通过现有中转节点链式拨号，保障出口纯净住宅 IP。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-3 space-y-4 text-xs">
+            {isLoadingActiveTunnels ? (
+              <div className="flex items-center justify-center py-8 text-white/40 gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+                正在加载活跃隧道...
+              </div>
+            ) : activeTunnels.length === 0 ? (
+              <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 space-y-2">
+                <p className="font-medium">⚠️ 暂无运行中的住宅隧道</p>
+                <p className="text-[11px] text-amber-200/70">
+                  当前服务器尚未启动任何住宅隧道。请先前往「全球住宅节点池」启动一个隧道后再引入。
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setResidentialDialogOpen(false);
+                    setViewMode("residential");
+                  }}
+                  className="h-7 text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40"
+                >
+                  前往启动住宅隧道
+                </Button>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <label className="text-white/70 font-medium">1. 选择活跃住宅隧道</label>
+                  <select
+                    value={selectedTunnelId}
+                    onChange={(e) => setSelectedTunnelId(e.target.value)}
+                    className="w-full h-9 px-3 rounded-lg bg-white/5 border border-white/10 text-white focus:outline-none focus:border-emerald-500 font-mono"
+                  >
+                    {activeTunnels.map((t) => {
+                      const reg = regionFromGeo(t.country, t.country);
+                      return (
+                        <option key={t.id} value={t.id} className="bg-neutral-900 text-white">
+                          {reg.emoji} {reg.label} ({t.ip}) - 本地端口 :{t.port} [{t.tun}]
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-white/70 font-medium">2. 选择前置中转节点 (dialer-proxy)</label>
+                  {nodes.filter((n) => !(n as unknown as Record<string, unknown>)["_isResidential"]).length === 0 ? (
+                    <p className="text-rose-400 text-[11px]">
+                      当前配置中暂无可用前置节点，请先在左侧解析并导入至少一个常规代理节点。
+                    </p>
+                  ) : (
+                    <select
+                      value={selectedDialerProxy}
+                      onChange={(e) => setSelectedDialerProxy(e.target.value)}
+                      className="w-full h-9 px-3 rounded-lg bg-white/5 border border-white/10 text-white focus:outline-none focus:border-emerald-500 font-mono"
+                    >
+                      <option value="" disabled className="bg-neutral-900 text-white/50">
+                        -- 请选择前置中转节点 --
+                      </option>
+                      {nodes
+                        .filter((n) => !(n as unknown as Record<string, unknown>)["_isResidential"])
+                        .map((n) => (
+                          <option key={n.name} value={n.name} className="bg-neutral-900 text-white">
+                            {n.name} ({n.type})
+                          </option>
+                        ))}
+                    </select>
+                  )}
+                  <p className="text-[11px] text-white/40">
+                    流量将先流经此前置节点到达 VPS 本地回环端口，再由 OpenVPN 隧道送达目标住宅 IP。
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-white/60 space-y-1 text-[11px]">
+                  <p className="font-semibold text-emerald-400">🛡️ 安全与链路保障：</p>
+                  <p>• 本地 SOCKS5 代理仅监听 127.0.0.1，公网完全隐身，免遭扫描。</p>
+                  <p>• 自动在生成的 Clash 配置中注入 <code className="text-emerald-300">dialer-proxy</code> 链式代理参数。</p>
+                </div>
+              </>
+            )}
+          </div>
+
+          <DialogFooter className="flex items-center justify-between sm:justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setResidentialDialogOpen(false)}
+              className="border-white/10 hover:bg-white/5 text-white/80"
+            >
+              取消
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleConfirmAddResidentialNode}
+              disabled={
+                isLoadingActiveTunnels ||
+                activeTunnels.length === 0 ||
+                !selectedDialerProxy ||
+                !selectedTunnelId
+              }
+              className="bg-emerald-600 hover:bg-emerald-500 text-white"
+            >
+              确认引入
             </Button>
           </DialogFooter>
         </DialogContent>

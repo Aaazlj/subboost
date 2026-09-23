@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   consumeLocalRateLimit: vi.fn(),
   generateSubscriptionYaml: vi.fn(),
+  generateSubscriptionContent: vi.fn(),
   getTrustedClientRateLimitKey: vi.fn(),
   hashLocalRateLimitKey: vi.fn(() => "token-hash"),
   localRateLimitResponse: vi.fn(
@@ -18,6 +19,7 @@ vi.mock("@local/lib/rate-limit", () => ({
 }));
 vi.mock("@local/lib/subscription-service", () => ({
   generateSubscriptionYaml: mocks.generateSubscriptionYaml,
+  generateSubscriptionContent: mocks.generateSubscriptionContent,
 }));
 
 import { GET } from "./route";
@@ -29,6 +31,15 @@ describe("local subscription YAML route", () => {
     mocks.getTrustedClientRateLimitKey.mockReturnValue("client-hash");
     mocks.generateSubscriptionYaml.mockResolvedValue({
       yaml: "mixed-port: 7890\n",
+      name: "Test",
+      subscriptionInfo: {},
+      cacheExpirySeconds: 3600,
+      autoUpdateIntervalSeconds: null,
+      isAdmin: true,
+    });
+    mocks.generateSubscriptionContent.mockResolvedValue({
+      content: "mixed-port: 7890\n",
+      contentType: "text/yaml; charset=utf-8",
       name: "Test",
       subscriptionInfo: {},
       cacheExpirySeconds: 3600,
@@ -56,7 +67,7 @@ describe("local subscription YAML route", () => {
       "token-hash",
       { limit: 120, windowMs: 60_000 }
     );
-    expect(mocks.generateSubscriptionYaml).toHaveBeenCalledWith("secret-token");
+    expect(mocks.generateSubscriptionContent).toHaveBeenCalledWith("secret-token", "clash");
   });
 
   it("returns 429 before touching subscription data", async () => {
@@ -71,7 +82,7 @@ describe("local subscription YAML route", () => {
       "Too many subscription requests. Try again later.",
       17
     );
-    expect(mocks.generateSubscriptionYaml).not.toHaveBeenCalled();
+    expect(mocks.generateSubscriptionContent).not.toHaveBeenCalled();
   });
 
   it("skips the client bucket when no trustworthy client key is available", async () => {

@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""
+SubBoost 住宅节点 OpenVPN 隧道与本地回环 SOCKS5 代理守护程序
+仅监听 127.0.0.1，公网完全无端口暴露，配合 Clash dialer-proxy 链式落地使用。
+"""
+from __future__ import annotations
+import argparse
+import base64
+import json
+import os
+import re
+import select
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+DATA_DIR = Path(os.environ.get("SUBSCRIPTION_OUTPUT_DIR", "./data"))
+STATE_FILE = DATA_DIR / "vpngate_tunnels.json"
+CONFIG_DIR = DATA_DIR / "vpngate_configs"
+
+# SOCKS5 简易代理服务，绑定特定 tun 出口
+class Socks5Relay:
+    def __init__(self, host: str, port: int, tun: str):
+        self.host = host
+        self.port = port
+        self.tun = tun
+        self.running = False
+        self.server_sock = None
+        self.thread = None
+
+    def start(self):
+        self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_sock.bind((self.host, self.port))
+        self.server_sock.listen(128)
+        self.running = True
+        self.thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.server_sock:
+            try:
+                self.server_sock.close()
+            except Exception:
+                pass
+
+    def _accept_loop(self):
+        while self.running:
+            try:
+                client, _ = self.server_sock.accept()
+                threading.Thread(target=self._handle_client, args=(client,), daemon=True).start()
+            except Exception:
+                break
+
+    def _handle_client(self, client: socket.socket):
+        try:
+            client.settimeout(15)
+            # 1. SOCKS5 握手
+            ver, nmethods = client.recv(1), client.recv(1)
+            if not ver or ver[0] != 5:
+                client.close()
+                return
+            methods = client.recv(nmethods[0])
+            client.sendall(b"\x05\x00") # 无需认证
+
+            # 2. 请求阶段
+            req = client.recv(4)
+            if len(req) < 4 or req[0] != 5 or req[1] != 1: # 仅支持 CONNECT (0x01)
+                client.sendall(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")
+                client.close()
+                return
+
+            atyp = req[3]
+            dest_host = ""
+            if atyp == 1: # IPv4
+                dest_host = socket.inet_ntoa(client.recv(4))
+            elif atyp == 3: # 域名
+                domain_len = client.recv(1)[0]
+                dest_host = client.recv(domain_len).decode("utf-8", errors="replace")
+            elif atyp == 4: # IPv6
+                dest_host = socket.inet_ntop(socket.AF_INET6, client.recv(16))
+            else:
+                client.close()
+                return
+
+            dest_port = int.from_bytes(client.recv(2), "big")
+
+            # 3. 建立出站连接并绑定到指定 tun 设备
+            remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            remote.settimeout(10)
+            if self.tun:
+                try:
+                    # SO_BINDTODEVICE = 25
+                    remote.setsockopt(socket.SOL_SOCKET, 25, self.tun.encode("utf-8"))
+                except Exception:
+                    pass
+
+            remote.connect((dest_host, dest_port))
+            # 响应成功
+            client.sendall(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+
+            # 4. 双向中继
+            self._relay(client, remote)
+        except Exception:
+            pass
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    def _relay(self, left: socket.socket, right: socket.socket):
+        sockets = [left, right]
+        while self.running:
+            try:
+                r, _, e = select.select(sockets, [], sockets, 60)
+                if e or not r:
+                    break
+                for s in r:
+                    data = s.recv(32768)
+                    if not data:
+                        return
+                    peer = right if s is left else left
+                    peer.sendall(data)
+            except Exception:
+                break
+
+
+def run_cmd(cmd: str) -> tuple[int, str]:
+    p = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    return p.returncode, (p.stdout + "\n" + p.stderr).strip()
+
+
+def load_state() -> list[dict]:
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return []
+
+
+def save_state(state: list[dict]):
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_ovpn_file(raw_ovpn: str, tun_name: str, index: int) -> Path:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    cleaned = []
+    drop_prefixes = (
+        "dev ", "dev-", "route ", "redirect-gateway", "ifconfig",
+        "up ", "down ", "script-security", "auth-user-pass", "auth-nocache",
+        "persist-tun", "keepalive", "ping ", "ping-restart", "ping-exit",
+        "verb ", "mute ", "log ", "status ", "writepid", "daemon",
+    )
+    for ln in raw_ovpn.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#") or s.startswith(";"):
+            cleaned.append(ln)
+            continue
+        if s.lower().startswith(drop_prefixes):
+            continue
+        cleaned.append(ln)
+
+    auth_file = CONFIG_DIR / f"auth_{index}.txt"
+    auth_file.write_text("vpn\nvpn\n", encoding="utf-8")
+
+    lines = [
+        "client",
+        f"dev {tun_name}",
+        "dev-type tun",
+        "persist-tun",
+        "auth-nocache",
+        f"auth-user-pass {auth_file}",
+        "script-security 2",
+        "route-nopull",
+        "verb 2",
+    ]
+    lines.extend(cleaned)
+    ovpn_path = CONFIG_DIR / f"{tun_name}.ovpn"
+    ovpn_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return ovpn_path
+
+
+def start_tunnel(node_id: str, hostname: str, ip: str, country: str, port: int, ovpn_b64: str) -> dict:
+    state = load_state()
+    # 查找空闲索引
+    used_tuns = {item.get("tun") for item in state if item.get("alive")}
+    idx = 1
+    while f"tun{idx}" in used_tuns:
+        idx += 1
+
+    tun_name = f"tun{idx}"
+    table_id = 100 + idx
+
+    raw_ovpn = base64.b64decode(ovpn_b64).decode("utf-8", errors="replace")
+    ovpn_path = write_ovpn_file(raw_ovpn, tun_name, idx)
+
+    # 启动 OpenVPN 进程
+    cmd = f"openvpn --config {ovpn_path} --daemon ovpn_{tun_name}"
+    rc, out = run_cmd(cmd)
+    if rc != 0:
+        return {"success": False, "error": f"OpenVPN 启动失败: {out}"}
+
+    # 等待 tun 设备就绪，最多等待 6 秒
+    device_ready = False
+    for _ in range(12):
+        time.sleep(0.5)
+        rc, _ = run_cmd(f"ip link show {tun_name}")
+        if rc == 0:
+            device_ready = True
+            break
+
+    if not device_ready:
+        run_cmd(f"pkill -f {ovpn_path.name}")
+        return {"success": False, "error": "TUN 设备创建超时，未能连通目标节点"}
+
+    # 配置策略路由
+    run_cmd(f"ip route flush table {table_id}")
+    run_cmd(f"ip route add default dev {tun_name} table {table_id}")
+    run_cmd(f"ip rule del oif {tun_name} 2>/dev/null")
+    run_cmd(f"ip rule add oif {tun_name} table {table_id} pref {table_id}")
+
+    # 启动只监听回环的 SOCKS5 代理
+    proxy_cmd = f"python3 {__file__} run-proxy --port {port} --tun {tun_name} >/dev/null 2>&1 &"
+    subprocess.Popen(proxy_cmd, shell=True)
+
+    tunnel_info = {
+        "id": node_id,
+        "hostname": hostname,
+        "ip": ip,
+        "country": country,
+        "tun": tun_name,
+        "port": port,
+        "tableId": table_id,
+        "alive": True,
+        "startTime": int(time.time()),
+    }
+
+    # 更新状态文件
+    new_state = [item for item in state if item.get("id") != node_id]
+    new_state.append(tunnel_info)
+    save_state(new_state)
+
+    return {"success": True, "tunnel": tunnel_info}
+
+
+def stop_tunnel(node_id: str) -> dict:
+    state = load_state()
+    target = None
+    remaining = []
+    for item in state:
+        if item.get("id") == node_id:
+            target = item
+        else:
+            remaining.append(item)
+
+    if not target:
+        return {"success": False, "error": "未找到指定隧道"}
+
+    tun_name = target.get("tun", "")
+    table_id = target.get("tableId")
+
+    # 停止 OpenVPN 进程
+    if tun_name:
+        run_cmd(f"pkill -f 'ovpn_{tun_name}'")
+        run_cmd(f"pkill -f 'run-proxy --port {target.get('port')}'")
+        if table_id:
+            run_cmd(f"ip rule del oif {tun_name} 2>/dev/null")
+            run_cmd(f"ip route flush table {table_id} 2>/dev/null")
+
+    save_state(remaining)
+    return {"success": True}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="SubBoost 隧道守护管理")
+    subparsers = parser.add_subparsers(dest="action")
+
+    start_p = subparsers.add_parser("start")
+    start_p.add_argument("--id", required=True)
+    start_p.add_argument("--hostname", required=True)
+    start_p.add_argument("--ip", required=True)
+    start_p.add_argument("--country", required=True)
+    start_p.add_argument("--port", type=int, required=True)
+    start_p.add_argument("--ovpn-b64", required=True)
+
+    stop_p = subparsers.add_parser("stop")
+    stop_p.add_argument("--id", required=True)
+
+    subparsers.add_parser("list")
+
+    proxy_p = subparsers.add_parser("run-proxy")
+    proxy_p.add_argument("--port", type=int, required=True)
+    proxy_p.add_argument("--tun", required=True)
+
+    args = parser.parse_args()
+
+    if args.action == "start":
+        res = start_tunnel(args.id, args.hostname, args.ip, args.country, args.port, args.ovpn_b64)
+        print(json.dumps(res, ensure_ascii=False))
+    elif args.action == "stop":
+        res = stop_tunnel(args.id)
+        print(json.dumps(res, ensure_ascii=False))
+    elif args.action == "list":
+        state = load_state()
+        print(json.dumps({"success": True, "tunnels": state}, ensure_ascii=False))
+    elif args.action == "run-proxy":
+        relay = Socks5Relay("127.0.0.1", args.port, args.tun)
+        relay.start()
+        # 保持前台
+        while True:
+            time.sleep(3600)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

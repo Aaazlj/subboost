@@ -26,6 +26,11 @@ services:
         condition: service_healthy
     ports:
       - "${SUBBOOST_PORT:-38921}:3000"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
     volumes:
       - ./data:/data
     environment:
