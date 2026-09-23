@@ -19,10 +19,30 @@ export type VpngateNode = {
   latencyMs?: number;
 };
 
-const PRIMARY_API = "https://www.vpngate.net/api/iphone/";
-const MIRROR_API = "https://baoweise-bot.github.io/aimili-vpngate/vpngate.csv";
+const CANDIDATE_SOURCES = [
+  { name: "github_mirror", url: "https://baoweise-bot.github.io/aimili-vpngate/vpngate.csv" },
+  { name: "github_raw", url: "https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/mirror/vpngate.csv" },
+  { name: "official_https", url: "https://www.vpngate.net/api/iphone/" },
+  { name: "official_http", url: "http://www.vpngate.net/api/iphone/" },
+];
+
 const CACHE_FILE = join(process.env.SUBSCRIPTION_OUTPUT_DIR || "./data", "vpngate_cache.json");
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 分钟缓存
+
+/**
+ * 校验返回内容是否为合法的 VPNGate CSV，防止将反爬拦截的 HTML 错误当成 CSV 解析
+ */
+export function isValidVpngateCsv(text: string): boolean {
+  if (!text || text.length < 500) return false;
+  if (text.includes("<!DOCTYPE") || text.includes("<html") || text.includes("__VIEWSTATE")) {
+    return false;
+  }
+  return (
+    text.includes("OpenVPN_ConfigData_Base64") ||
+    text.includes("*vpn_servers") ||
+    text.includes("#HostName")
+  );
+}
 
 /**
  * 推断 IP 类型（优先识别住宅/教育网/家庭宽带）
@@ -214,7 +234,12 @@ export async function getVpngateNodes(options?: { force?: boolean }): Promise<{
   if (!force) {
     try {
       const cached = JSON.parse(await readFile(CACHE_FILE, "utf-8"));
-      if (cached && Array.isArray(cached.nodes) && Date.now() - (cached.timestamp || 0) < CACHE_TTL_MS) {
+      if (
+        cached &&
+        Array.isArray(cached.nodes) &&
+        cached.nodes.length > 0 &&
+        Date.now() - (cached.timestamp || 0) < CACHE_TTL_MS
+      ) {
         return {
           nodes: cached.nodes,
           fromCache: true,
@@ -227,56 +252,55 @@ export async function getVpngateNodes(options?: { force?: boolean }): Promise<{
   }
 
   let csvText = "";
-  try {
-    const res = await fetch(PRIMARY_API, {
-      signal: AbortSignal.timeout(12000),
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; SubBoost-Vpngate/1.0)" },
-    });
-    if (res.ok) {
-      csvText = await res.text();
-    }
-  } catch (err) {
-    console.warn("[vpngate] 主源获取失败，尝试备用镜像源:", err);
-  }
-
-  if (!csvText) {
+  for (const src of CANDIDATE_SOURCES) {
     try {
-      const res = await fetch(MIRROR_API, {
-        signal: AbortSignal.timeout(12000),
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; SubBoost-Vpngate/1.0)" },
+      const res = await fetch(src.url, {
+        signal: AbortSignal.timeout(10000),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          Accept: "text/plain,text/csv,*/*",
+        },
       });
       if (res.ok) {
-        csvText = await res.text();
+        const text = await res.text();
+        if (isValidVpngateCsv(text)) {
+          csvText = text;
+          break;
+        } else {
+          console.warn(`[vpngate] 节点源 ${src.name} 返回非有效 CSV 内容（疑似拦截），尝试下一个源`);
+        }
       }
     } catch (err) {
-      console.error("[vpngate] 备用源获取失败:", err);
+      console.warn(`[vpngate] 节点源 ${src.name} 请求失败:`, err);
     }
   }
 
   if (!csvText) {
     try {
       const stale = JSON.parse(await readFile(CACHE_FILE, "utf-8"));
-      if (stale && Array.isArray(stale.nodes)) {
+      if (stale && Array.isArray(stale.nodes) && stale.nodes.length > 0) {
         return { nodes: stale.nodes, fromCache: true, timestamp: stale.timestamp };
       }
     } catch {}
-    throw new Error("无法从 VPNGate 获取节点列表，请稍后重试");
+    throw new Error("无法从 VPNGate 各数据源获取有效节点列表，请稍后重试");
   }
 
   const parsed = parseVpngateCsv(csvText);
   parsed.sort((a, b) => b.score - a.score || b.speed - a.speed);
-  const topCandidates = parsed.slice(0, 50);
+  const topCandidates = parsed.slice(0, 60);
 
   const probedNodes = await probeNodesConcurrently(topCandidates, 15);
 
   const timestamp = Date.now();
   const payload = { timestamp, nodes: probedNodes };
 
-  try {
-    await mkdir(join(CACHE_FILE, ".."), { recursive: true });
-    await writeFile(CACHE_FILE, JSON.stringify(payload, null, 2), "utf-8");
-  } catch (writeErr) {
-    console.warn("[vpngate] 写入缓存文件失败:", writeErr);
+  if (probedNodes.length > 0) {
+    try {
+      await mkdir(join(CACHE_FILE, ".."), { recursive: true });
+      await writeFile(CACHE_FILE, JSON.stringify(payload, null, 2), "utf-8");
+    } catch (writeErr) {
+      console.warn("[vpngate] 写入缓存文件失败:", writeErr);
+    }
   }
 
   return { nodes: probedNodes, fromCache: false, timestamp };

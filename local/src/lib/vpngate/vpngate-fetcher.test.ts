@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inferIpType, parseVpngateCsv } from "./vpngate-fetcher";
+import { inferIpType, isValidVpngateCsv, parseVpngateCsv } from "./vpngate-fetcher";
 
 describe("vpngate-fetcher", () => {
   it("正确识别住宅、教育网与机房 IP", () => {
@@ -24,5 +24,14 @@ vg-test-2,15.0.0.2,30000,35,5000000,United States,US,5,2000,300,10000000,2weeks,
     expect(nodes[0].openvpnConfigBase64).toBe("Y29uZmlnMQ==");
     expect(nodes[1].countryShort).toBe("US");
     expect(nodes[1].ipType).toBe("住宅/家庭宽带");
+  });
+
+  it("正确识别合法 VPNGate CSV 与 HTML 拦截响应", () => {
+    const validCsv = `*vpn_servers\n#HostName,IP,Score,Ping,Speed,CountryLong,CountryShort,NumVpnSessions,Uptime,TotalUsers,TotalTraffic,LogType,Operator,Message,OpenVPN_ConfigData_Base64\n` + "x".repeat(500);
+    const htmlResponse = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN">\n<html><head></head><body><form id="form1"></form></body></html>`;
+
+    expect(isValidVpngateCsv(validCsv)).toBe(true);
+    expect(isValidVpngateCsv(htmlResponse)).toBe(false);
+    expect(isValidVpngateCsv("")).toBe(false);
   });
 });
