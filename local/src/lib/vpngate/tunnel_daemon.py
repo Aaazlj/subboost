@@ -231,7 +231,14 @@ class Socks5Relay:
             # 3. 建立出站连接并绑定到指定 tun 设备
             remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             remote.settimeout(10)
-            bind_tun_device(remote, self.tun)
+            if self.tun and not bind_tun_device(remote, self.tun):
+                # 绑不上隧道设备时绝不能继续，否则流量会从 VPS 自己的出口泄漏出去
+                try:
+                    client.sendall(b"\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00")
+                except Exception:
+                    pass
+                remote.close()
+                return
 
             try:
                 remote.connect((dest_host, dest_port))
@@ -282,13 +289,19 @@ def run_cmd(cmd: str) -> tuple[int, str]:
     return p.returncode, (p.stdout + "\n" + p.stderr).strip()
 
 
-def bind_tun_device(sock: socket.socket, tun_name: str) -> None:
+def bind_tun_device(sock: socket.socket, tun_name: str) -> bool:
+    """把 socket 绑定到指定 tun 设备。
+
+    必须严格判断成败：一旦绑定失败（设备不存在等）却继续连接，流量会从 VPS 的默认出口
+    发出去，既会造成住宅 IP 泄漏，也会让健康探测误判为「隧道正常」。
+    """
     if not tun_name:
-        return
+        return False
     try:
         sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, tun_name.encode("utf-8"))
+        return True
     except OSError:
-        pass
+        return False
 
 
 def device_exists(tun_name: str) -> bool:
@@ -308,13 +321,16 @@ def probe_via_tun(tun_name: str, timeout: float = HEALTH_PROBE_TIMEOUT) -> bool:
     """绑定 tun 设备做一次 TCP 握手，判断隧道能否真正到达公网。
 
     OpenVPN 自带的 ping 只打到隧道对端，服务端转发/NAT 挂掉时依旧「健康」，
-    所以健康检查必须端到端探测公网。
+    所以健康检查必须端到端探测公网；同时绑定失败必须直接判为不健康。
     """
+    if not device_exists(tun_name):
+        return False
     for host, port in HEALTH_PROBE_TARGETS:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         try:
-            bind_tun_device(sock, tun_name)
+            if not bind_tun_device(sock, tun_name):
+                return False
             sock.connect((host, port))
             return True
         except OSError:
@@ -358,8 +374,9 @@ def check_public_egress(tun_name: str) -> str:
         response = None
         deadline = time.monotonic() + 5
         try:
-            # 绑定 TUN，确保检查流量不能回落到 VPS 默认出口。
-            bind_tun_device(raw, tun_name)
+            # 绑定 TUN，确保检查流量不能回落到 VPS 默认出口（绑定失败说明隧道已不可用）
+            if not bind_tun_device(raw, tun_name):
+                raise RuntimeError(f"无法绑定隧道设备 {tun_name}，隧道不可用")
             raw.settimeout(max(0.1, deadline - time.monotonic()))
             raw.connect(address)
             secured = context.wrap_socket(raw, server_hostname=EGRESS_CHECK_HOST)
@@ -403,9 +420,15 @@ def truncate_if_too_large(path: Path) -> None:
 
 
 def kill_openvpn(tun_name: str) -> None:
+    """只杀该隧道对应的 openvpn 进程。
+
+    必须用 `^openvpn ...` 锚定并带上 `--config`：轮询用的模式如果不加限定，
+    会连带把 run-proxy 中继进程（同一个守护程序、参数里也含隧道名）一起杀掉，
+    看门狗等于自杀，自愈就永远不会发生。
+    """
     if not tun_name:
         return
-    run_cmd(f"pkill -f 'vpngate_configs/{tun_name}.ovpn'")
+    run_cmd(f"pkill -f '^openvpn --config .*vpngate_configs/{tun_name}\\.ovpn'")
 
 
 def clear_tunnel_network(tun_name: str, table_id: int) -> None:
@@ -491,12 +514,14 @@ def launch_proxy(
     tun_name: str,
     port: int,
     table_id: int,
-    ovpn_path: Path,
     bind_ip: str,
     username: str,
     password: str,
 ) -> None:
-    """拉起 SOCKS5 中继 + 看门狗进程（输出落文件，避免挂住调用方管道）。"""
+    """拉起 SOCKS5 中继 + 看门狗进程（输出落文件，避免挂住调用方管道）。
+
+    注意：进程参数里不要出现 ovpn 配置文件路径，否则 kill_openvpn 的模式会误杀中继本身。
+    """
     run_cmd(f"pkill -f 'run-proxy .*--port {port}'")
     time.sleep(0.3)
 
@@ -514,7 +539,6 @@ def launch_proxy(
         "--ip", ip,
         "--country", country,
         "--table-id", str(table_id),
-        "--ovpn-file", str(ovpn_path),
     ]
     log_path = CONFIG_DIR / f"proxy_{tun_name}.log"
     truncate_if_too_large(log_path)
@@ -686,7 +710,6 @@ def start_tunnel(
         tun_name=tun_name,
         port=port,
         table_id=table_id,
-        ovpn_path=ovpn_path,
         bind_ip=bind_ip,
         username=user,
         password=pwd,
@@ -781,7 +804,6 @@ def main():
     proxy_p.add_argument("--ip", default="")
     proxy_p.add_argument("--country", default="")
     proxy_p.add_argument("--table-id", type=int, default=0)
-    proxy_p.add_argument("--ovpn-file", default="")
 
     args = parser.parse_args()
 
