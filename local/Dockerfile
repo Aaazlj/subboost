@@ -25,9 +25,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
       attempt=$((attempt + 1)); \
     done
 
-FROM node:22-alpine AS builder
-WORKDIR /package
-RUN apk add --no-cache openssl
+FROM deps AS builder
 
 ARG APP_RELEASE_VERSION=
 ARG APP_BUILD_SHA=
@@ -40,7 +38,6 @@ ENV APP_VERSION=${APP_VERSION}
 ENV APP_VERSION_TOKEN=${APP_VERSION_TOKEN}
 ENV BASE_PATH=${BASE_PATH}
 
-COPY --from=deps /package/node_modules node_modules
 COPY packages/core packages/core
 COPY packages/server-core packages/server-core
 COPY packages/ui packages/ui
