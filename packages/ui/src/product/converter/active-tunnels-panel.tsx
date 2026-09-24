@@ -35,6 +35,7 @@ export type ActiveTunnelItem = {
   tun: string;
   port: number;
   publicIp?: string;
+  egressIp?: string;
   username?: string;
   password?: string;
   tableId: number;
@@ -275,7 +276,7 @@ export function ActiveTunnelsPanel({
                           </Badge>
                         </div>
                         <p className="text-xs text-white/40 font-mono mt-0.5">
-                          出口 IP: {tunnel.ip}
+                          公网出口 IP: {tunnel.egressIp || "未检测"}
                         </p>
                       </div>
                     </div>

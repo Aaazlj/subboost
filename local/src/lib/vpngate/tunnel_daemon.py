@@ -6,12 +6,15 @@ SubBoost 住宅节点 OpenVPN 隧道与本地回环 SOCKS5 代理守护程序
 from __future__ import annotations
 import argparse
 import base64
+from http.client import HTTPException, HTTPResponse
+from ipaddress import ip_address
 import json
 import os
 import re
 import select
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -22,6 +25,58 @@ DATA_DIR = Path(os.environ.get("SUBSCRIPTION_OUTPUT_DIR", "./data"))
 STATE_FILE = DATA_DIR / "vpngate_tunnels.json"
 CONFIG_DIR = DATA_DIR / "vpngate_configs"
 SETTINGS_FILE = DATA_DIR / "settings.json"
+EGRESS_CHECK_HOST = "api.ipify.org"
+
+
+def check_public_egress(tun_name: str) -> str:
+    """通过指定 TUN 网卡完成 HTTPS 请求，并返回检测到的公网出口 IP。"""
+    try:
+        addresses = [
+            item
+            for item in socket.getaddrinfo(EGRESS_CHECK_HOST, 443, type=socket.SOCK_STREAM)
+            if item[0] == socket.AF_INET
+        ]
+    except OSError as err:
+        raise RuntimeError(f"公网出口检查失败：无法解析 {EGRESS_CHECK_HOST}：{err}") from err
+    if not addresses:
+        raise RuntimeError(f"公网出口检查失败：无法解析 {EGRESS_CHECK_HOST}")
+
+    context = ssl.create_default_context()
+    last_error: Exception | None = None
+    for attempt in range(3):
+        family, socktype, proto, _, address = addresses[attempt % len(addresses)]
+        raw = socket.socket(family, socktype, proto)
+        secured = None
+        response = None
+        deadline = time.monotonic() + 5
+        try:
+            # 绑定 TUN，确保检查流量不能回落到 VPS 默认出口。
+            raw.setsockopt(socket.SOL_SOCKET, 25, tun_name.encode("utf-8"))
+            raw.settimeout(max(0.1, deadline - time.monotonic()))
+            raw.connect(address)
+            secured = context.wrap_socket(raw, server_hostname=EGRESS_CHECK_HOST)
+            secured.settimeout(max(0.1, deadline - time.monotonic()))
+            secured.sendall(
+                f"GET / HTTP/1.1\r\nHost: {EGRESS_CHECK_HOST}\r\nConnection: close\r\n\r\n".encode()
+            )
+            response = HTTPResponse(secured)
+            response.begin()
+            if response.status != 200:
+                raise RuntimeError(f"{EGRESS_CHECK_HOST} 返回 HTTP {response.status}")
+            exit_ip = ip_address(response.read(64).decode("ascii").strip())
+            if not exit_ip.is_global:
+                raise RuntimeError(f"出口返回了非公网 IP：{exit_ip}")
+            return str(exit_ip)
+        except (OSError, HTTPException, UnicodeError, ValueError, RuntimeError) as err:
+            last_error = err
+        finally:
+            if response is not None:
+                response.close()
+            (secured or raw).close()
+        if attempt < 2:
+            time.sleep(1)
+
+    raise RuntimeError(f"住宅隧道无法访问公网（{EGRESS_CHECK_HOST}）：{last_error}")
 
 
 def load_settings() -> dict:
@@ -198,6 +253,14 @@ def run_cmd(cmd: str) -> tuple[int, str]:
     return p.returncode, (p.stdout + "\n" + p.stderr).strip()
 
 
+def stop_openvpn(config_path: Path, tun_name: str) -> None:
+    subprocess.run(
+        ["pkill", "-f", f"^openvpn --config {config_path} --daemon ovpn_{tun_name}"],
+        capture_output=True,
+        check=False,
+    )
+
+
 def load_state() -> list[dict]:
     if STATE_FILE.exists():
         try:
@@ -294,7 +357,7 @@ def start_tunnel(
             break
 
     if not device_ready:
-        run_cmd(f"pkill -f {ovpn_path.name}")
+        stop_openvpn(ovpn_path, tun_name)
         return {"success": False, "error": "TUN 设备创建超时，未能连通目标节点"}
 
     # 配置策略路由
@@ -302,6 +365,14 @@ def start_tunnel(
     run_cmd(f"ip route add default dev {tun_name} table {table_id}")
     run_cmd(f"ip rule del oif {tun_name} 2>/dev/null")
     run_cmd(f"ip rule add oif {tun_name} table {table_id} pref {table_id}")
+
+    try:
+        egress_ip = check_public_egress(tun_name)
+    except Exception as err:
+        stop_openvpn(ovpn_path, tun_name)
+        run_cmd(f"ip rule del oif {tun_name} 2>/dev/null")
+        run_cmd(f"ip route flush table {table_id} 2>/dev/null")
+        return {"success": False, "error": str(err)}
 
     # 启动支持鉴权的 SOCKS5 代理
     user_arg = f"--user '{user}'" if user else ""
@@ -317,6 +388,7 @@ def start_tunnel(
         "tun": tun_name,
         "port": port,
         "publicIp": public_ip,
+        "egressIp": egress_ip,
         "username": user,
         "password": pwd,
         "tableId": table_id,

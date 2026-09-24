@@ -1,0 +1,66 @@
+name: Build and deploy to Aliyun
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: aliyun-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: local/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/aaazlj/subboost:latest
+            ghcr.io/aaazlj/subboost:${{ github.sha }}
+          build-args: |
+            BASE_PATH=/admin
+            APP_BUILD_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=aliyun-app
+          cache-to: type=gha,mode=max,scope=aliyun-app
+
+      - name: Deploy image to Aliyun
+        env:
+          ALIYUN_SSH_KEY: ${{ secrets.ALIYUN_SSH_KEY }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          IMAGE_TAG: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$ALIYUN_SSH_KEY" ]]; then
+            echo "Add the ALIYUN_SSH_KEY repository secret to enable deployment." >&2
+            exit 1
+          fi
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$ALIYUN_SSH_KEY" > "$HOME/.ssh/aliyun"
+          chmod 600 "$HOME/.ssh/aliyun"
+          printf '%s\n' '47.89.253.12 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEStG375n0MtB6O9vNtdOU91anSrjl0BBRSaBYmMxugu' > "$HOME/.ssh/known_hosts"
+
+          ssh_options=(-i "$HOME/.ssh/aliyun" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          printf '%s' "$GHCR_TOKEN" | ssh "${ssh_options[@]}" root@47.89.253.12 \
+            "deploy $IMAGE_TAG $GHCR_USER"

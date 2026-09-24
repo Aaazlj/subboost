@@ -24,6 +24,7 @@ export type ActiveTunnel = {
   tun: string;
   port: number;
   publicIp?: string;
+  egressIp?: string;
   username?: string;
   password?: string;
   tableId: number;

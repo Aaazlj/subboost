@@ -15,11 +15,7 @@ services:
       retries: 10
 
   app:
-    build:
-      context: .
-      dockerfile: local/Dockerfile
-      args:
-        BASE_PATH: ${BASE_PATH:-/admin}
+    image: ${SUBBOOST_IMAGE:-ghcr.io/aaazlj/subboost:latest}
     restart: unless-stopped
     depends_on:
       db:

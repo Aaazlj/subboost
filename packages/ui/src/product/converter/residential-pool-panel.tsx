@@ -50,6 +50,7 @@ export type ActiveTunnelItem = {
   tun: string;
   port: number;
   publicIp?: string;
+  egressIp?: string;
   username?: string;
   password?: string;
   tableId: number;
@@ -184,7 +185,7 @@ export function ResidentialPoolPanel({
       }
       toast({
         title: "住宅隧道已建立",
-        description: `公网服务端口 10001~10008 [${data.tunnel.tun}] 已就绪，可前往「已激活隧道」查看或直接引入。`,
+        description: `公网出口 ${data.tunnel.egressIp} 已验证，服务端口 ${data.tunnel.port} [${data.tunnel.tun}] 已就绪，可直接引入。`,
       });
       await fetchTunnels();
     } catch (err: unknown) {
