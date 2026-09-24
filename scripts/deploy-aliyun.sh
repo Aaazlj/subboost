@@ -2,6 +2,24 @@
 set -eu
 
 cd /root/subboost
+if [ "${SSH_ORIGINAL_COMMAND:-}" = deploy-config ]; then
+  config_dir=$(mktemp -d /tmp/subboost-config.XXXXXX)
+  trap 'rm -rf "$config_dir"' EXIT
+  cat > "$config_dir/config.tar"
+  tar -tf "$config_dir/config.tar" | while IFS= read -r name; do
+    case "$name" in
+      docker-compose.yml|scripts/|scripts/deploy-aliyun.sh) ;;
+      *) echo "Unexpected deployment file: $name" >&2; exit 1 ;;
+    esac
+  done
+  tar -xf "$config_dir/config.tar" -C "$config_dir" --no-same-owner
+  [ -f "$config_dir/docker-compose.yml" ] && [ -f "$config_dir/scripts/deploy-aliyun.sh" ]
+  install -m 644 "$config_dir/docker-compose.yml" /root/subboost/docker-compose.yml
+  install -m 700 "$config_dir/scripts/deploy-aliyun.sh" /root/subboost/scripts/deploy-aliyun.sh
+  install -m 700 "$config_dir/scripts/deploy-aliyun.sh" /root/subboost/deploy-aliyun.sh
+  exit 0
+fi
+
 IFS=' ' read -r action IMAGE_TAG GHCR_USER <<EOF
 ${SSH_ORIGINAL_COMMAND:-}
 EOF
@@ -44,8 +62,7 @@ fi
 docker compose up -d --no-build app
 attempt=0
 while [ "$attempt" -lt 30 ]; do
-  container=$(docker compose ps -q app)
-  if [ -n "$container" ] && docker exec "$container" node -e 'fetch("http://127.0.0.1:3000/admin").then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))'; then
+  if curl -fsS --max-time 3 "http://127.0.0.1:${SUBBOOST_PORT:-38921}/admin" >/dev/null; then
     docker compose ps app
     exit 0
   fi

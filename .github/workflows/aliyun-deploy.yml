@@ -61,6 +61,8 @@ jobs:
           chmod 600 "$HOME/.ssh/aliyun"
           printf '%s\n' '47.89.253.12 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEStG375n0MtB6O9vNtdOU91anSrjl0BBRSaBYmMxugu' > "$HOME/.ssh/known_hosts"
 
-          ssh_options=(-i "$HOME/.ssh/aliyun" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          ssh_options=(-i "$HOME/.ssh/aliyun" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          tar -cf - docker-compose.yml scripts/deploy-aliyun.sh | \
+            ssh "${ssh_options[@]}" root@47.89.253.12 deploy-config
           printf '%s' "$GHCR_TOKEN" | ssh "${ssh_options[@]}" root@47.89.253.12 \
             "deploy $IMAGE_TAG $GHCR_USER"
