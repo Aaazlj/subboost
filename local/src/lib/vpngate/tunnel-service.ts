@@ -8,6 +8,14 @@ const execFileAsync = promisify(execFile);
 const SCRIPT_PATH = join(process.cwd(), "src/lib/vpngate/tunnel_daemon.py");
 const STATE_FILE = join(process.env.SUBSCRIPTION_OUTPUT_DIR || "./data", "vpngate_tunnels.json");
 
+const SETTINGS_FILE = join(process.env.SUBSCRIPTION_OUTPUT_DIR || "./data", "settings.json");
+
+export type SystemSettings = {
+  publicIp: string;
+  socksUser: string;
+  socksPass: string;
+};
+
 export type ActiveTunnel = {
   id: string;
   hostname: string;
@@ -15,6 +23,9 @@ export type ActiveTunnel = {
   country: string;
   tun: string;
   port: number;
+  publicIp?: string;
+  username?: string;
+  password?: string;
   tableId: number;
   alive: boolean;
   startTime: number;
@@ -22,6 +33,45 @@ export type ActiveTunnel = {
 
 const PORT_START = 10001;
 const PORT_END = 10008;
+
+/**
+ * 读取系统代理与公网设置
+ */
+export async function getSystemSettings(): Promise<SystemSettings> {
+  const defaults: SystemSettings = {
+    publicIp: process.env.DEFAULT_PUBLIC_IP || "47.89.253.12",
+    socksUser: process.env.VPN_SOCKS_USER || "subboost",
+    socksPass: process.env.VPN_SOCKS_PASS || "subboost888",
+  };
+  try {
+    const raw = await readFile(SETTINGS_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    return {
+      publicIp: parsed.publicIp || defaults.publicIp,
+      socksUser: parsed.socksUser || defaults.socksUser,
+      socksPass: parsed.socksPass || defaults.socksPass,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+/**
+ * 保存系统代理与公网设置
+ */
+export async function updateSystemSettings(settings: Partial<SystemSettings>): Promise<SystemSettings> {
+  const current = await getSystemSettings();
+  const updated: SystemSettings = {
+    publicIp: (settings.publicIp || current.publicIp).trim(),
+    socksUser: (settings.socksUser ?? current.socksUser).trim(),
+    socksPass: (settings.socksPass ?? current.socksPass).trim(),
+  };
+  const { writeFile, mkdir } = await import("node:fs/promises");
+  const { dirname } = await import("node:path");
+  await mkdir(dirname(SETTINGS_FILE), { recursive: true });
+  await writeFile(SETTINGS_FILE, JSON.stringify(updated, null, 2), "utf-8");
+  return updated;
+}
 
 /**
  * 获取当前所有活跃隧道列表
@@ -53,6 +103,7 @@ async function allocateLoopbackPort(): Promise<number> {
  */
 export async function startTunnel(node: VpngateNode): Promise<ActiveTunnel> {
   const port = await allocateLoopbackPort();
+  const settings = await getSystemSettings();
 
   try {
     const { stdout } = await execFileAsync("python3", [
@@ -70,6 +121,12 @@ export async function startTunnel(node: VpngateNode): Promise<ActiveTunnel> {
       String(port),
       "--ovpn-b64",
       node.openvpnConfigBase64,
+      "--bind",
+      "0.0.0.0",
+      "--user",
+      settings.socksUser,
+      "--pass",
+      settings.socksPass,
     ]);
 
     const res = JSON.parse(stdout.trim());

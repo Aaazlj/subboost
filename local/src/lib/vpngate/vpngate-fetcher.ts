@@ -222,6 +222,23 @@ async function probeNodesConcurrently(nodes: VpngateNode[], concurrency = 15): P
 }
 
 /**
+ * 单节点实时快速探活测速
+ */
+export async function probeSingleNode(ip: string): Promise<{ reachable: boolean; latencyMs?: number }> {
+  let rtt = await tcpProbe(ip, 443, 2500);
+  if (rtt === null) {
+    rtt = await tcpProbe(ip, 1194, 2500);
+  }
+  if (rtt === null) {
+    rtt = await tcpProbe(ip, 80, 2500);
+  }
+  return {
+    reachable: rtt !== null,
+    latencyMs: rtt !== null ? rtt : undefined,
+  };
+}
+
+/**
  * 获取 VPNGate 节点列表（优先缓存，支持强制刷新）
  */
 export async function getVpngateNodes(options?: { force?: boolean }): Promise<{
@@ -287,14 +304,17 @@ export async function getVpngateNodes(options?: { force?: boolean }): Promise<{
 
   const parsed = parseVpngateCsv(csvText);
   parsed.sort((a, b) => b.score - a.score || b.speed - a.speed);
+  // 对评分最高的前 60 个节点执行主动探活，其余节点全量保留展示
   const topCandidates = parsed.slice(0, 60);
+  const remainingCandidates = parsed.slice(60);
 
-  const probedNodes = await probeNodesConcurrently(topCandidates, 15);
+  const probedTopNodes = await probeNodesConcurrently(topCandidates, 15);
+  const allNodes = [...probedTopNodes, ...remainingCandidates];
 
   const timestamp = Date.now();
-  const payload = { timestamp, nodes: probedNodes };
+  const payload = { timestamp, nodes: allNodes };
 
-  if (probedNodes.length > 0) {
+  if (allNodes.length > 0) {
     try {
       await mkdir(join(CACHE_FILE, ".."), { recursive: true });
       await writeFile(CACHE_FILE, JSON.stringify(payload, null, 2), "utf-8");
@@ -303,5 +323,5 @@ export async function getVpngateNodes(options?: { force?: boolean }): Promise<{
     }
   }
 
-  return { nodes: probedNodes, fromCache: false, timestamp };
+  return { nodes: allNodes, fromCache: false, timestamp };
 }

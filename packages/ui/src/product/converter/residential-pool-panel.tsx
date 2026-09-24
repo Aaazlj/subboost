@@ -14,6 +14,7 @@ import {
   Server,
   ShieldCheck,
   Wifi,
+  Zap,
 } from "lucide-react";
 import { Button } from "@subboost/ui/components/ui/button";
 import { Input } from "@subboost/ui/components/ui/input";
@@ -48,6 +49,9 @@ export type ActiveTunnelItem = {
   country: string;
   tun: string;
   port: number;
+  publicIp?: string;
+  username?: string;
+  password?: string;
   tableId: number;
   alive: boolean;
   startTime: number;
@@ -56,11 +60,13 @@ export type ActiveTunnelItem = {
 interface ResidentialPoolPanelProps {
   onBackToConfig: () => void;
   onSelectTunnelForConfig?: (tunnel: ActiveTunnelItem) => void;
+  onGoToActiveTunnels?: () => void;
 }
 
 export function ResidentialPoolPanel({
   onBackToConfig,
   onSelectTunnelForConfig,
+  onGoToActiveTunnels,
 }: ResidentialPoolPanelProps) {
   const { toast } = useToast();
   const [nodes, setNodes] = React.useState<VpngateNodeItem[]>([]);
@@ -68,11 +74,13 @@ export function ResidentialPoolPanel({
   const [isLoadingNodes, setIsLoadingNodes] = React.useState(false);
   const [isLoadingTunnels, setIsLoadingTunnels] = React.useState(false);
   const [operatingId, setOperatingId] = React.useState<string | null>(null);
+  const [probingIp, setProbingIp] = React.useState<string | null>(null);
 
   // 筛选状态
   const [countryFilter, setCountryFilter] = React.useState<string>("all");
   const [searchKeyword, setSearchKeyword] = React.useState<string>("");
   const [onlyResidential, setOnlyResidential] = React.useState<boolean>(false);
+  const [onlyOnline, setOnlyOnline] = React.useState<boolean>(false);
 
   // 获取活跃隧道
   const fetchTunnels = React.useCallback(async () => {
@@ -92,7 +100,7 @@ export function ResidentialPoolPanel({
     }
   }, []);
 
-  // 获取 VPNGate 节点
+  // 获取 VPNGate 全量候选节点
   const fetchNodes = React.useCallback(
     async (force = false) => {
       setIsLoadingNodes(true);
@@ -132,6 +140,35 @@ export function ResidentialPoolPanel({
     fetchTunnels();
   }, [fetchNodes, fetchTunnels]);
 
+  // 单节点实时测速探活
+  const handleProbeNode = async (ip: string) => {
+    setProbingIp(ip);
+    try {
+      const res = await fetch(withBasePath("/api/vpngate/probe"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ip }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNodes((prev) =>
+          prev.map((n) =>
+            n.ip === ip ? { ...n, reachable: data.reachable, latencyMs: data.latencyMs } : n
+          )
+        );
+        if (data.reachable) {
+          toast({ title: "测速成功", description: `${ip} 延迟: ${data.latencyMs}ms` });
+        } else {
+          toast({ title: "测速超时", description: `${ip} 端口未响应`, variant: "destructive" });
+        }
+      }
+    } catch {
+      toast({ title: "测速请求失败", variant: "destructive" });
+    } finally {
+      setProbingIp(null);
+    }
+  };
+
   // 启动隧道
   const handleStartTunnel = async (node: VpngateNodeItem) => {
     setOperatingId(node.id);
@@ -147,7 +184,7 @@ export function ResidentialPoolPanel({
       }
       toast({
         title: "住宅隧道已建立",
-        description: `本地回环端口 127.0.0.1:${data.tunnel.port} 已就绪，公网无端口暴露。`,
+        description: `公网服务端口 10001~10008 [${data.tunnel.tun}] 已就绪，可前往「已激活隧道」查看或直接引入。`,
       });
       await fetchTunnels();
     } catch (err: unknown) {
@@ -172,7 +209,7 @@ export function ResidentialPoolPanel({
       if (!res.ok || !data.success) {
         throw new Error(data.error || "停止隧道失败");
       }
-      toast({ title: "隧道已断开", description: "本地回环端口已释放。" });
+      toast({ title: "隧道已断开", description: "OpenVPN 守护进程已停止，端口已释放。" });
       await fetchTunnels();
     } catch (err: unknown) {
       toast({
@@ -201,6 +238,7 @@ export function ResidentialPoolPanel({
       if (countryFilter !== "all" && node.countryShort !== countryFilter) return false;
       if (onlyResidential && !node.ipType.includes("住宅") && !node.ipType.includes("教育网"))
         return false;
+      if (onlyOnline && !node.reachable) return false;
       if (searchKeyword.trim()) {
         const q = searchKeyword.trim().toLowerCase();
         const matchIp = node.ip.toLowerCase().includes(q);
@@ -211,7 +249,7 @@ export function ResidentialPoolPanel({
       }
       return true;
     });
-  }, [nodes, countryFilter, onlyResidential, searchKeyword]);
+  }, [nodes, countryFilter, onlyResidential, onlyOnline, searchKeyword]);
 
   const activeNodeIds = new Set(tunnels.map((t) => t.id));
 
@@ -235,12 +273,24 @@ export function ResidentialPoolPanel({
               全球住宅节点池
             </h1>
             <p className="text-xs text-white/50 mt-0.5">
-              全球志愿者家庭/教育网宽带 IP · 仅监听本地回环 127.0.0.1 · 公网 0 端口暴露
+              全球志愿者家庭/教育网真实宽带出口 · 支持单节点快速测速 · 支持直连公网与中转落地
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2.5">
+          {onGoToActiveTunnels && tunnels.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onGoToActiveTunnels}
+              className="h-9 border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
+            >
+              <Zap className="h-4 w-4 mr-1.5 text-amber-400" />
+              查看已激活隧道 ({tunnels.length})
+            </Button>
+          )}
+
           <Button
             variant="outline"
             size="sm"
@@ -249,7 +299,7 @@ export function ResidentialPoolPanel({
             className="h-9 border-white/10 hover:bg-white/5 text-white/80"
           >
             <RefreshCw className={cn("h-4 w-4 mr-1.5", isLoadingNodes && "animate-spin")} />
-            拉取最新节点
+            全量更新节点
           </Button>
         </div>
       </div>
@@ -271,9 +321,9 @@ export function ResidentialPoolPanel({
         <Card className="border-white/10 bg-black/40 backdrop-blur-md">
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <p className="text-xs text-white/40">已探活住宅节点</p>
+              <p className="text-xs text-white/40">全球候选住宅节点</p>
               <p className="text-2xl font-bold text-white mt-1">
-                {nodes.filter((n) => n.reachable).length} <span className="text-xs font-normal text-white/40">/ {nodes.length} 总候选</span>
+                {nodes.length} <span className="text-xs font-normal text-white/40">个 (已测速在线 {nodes.filter((n) => n.reachable).length})</span>
               </p>
             </div>
             <Wifi className="h-8 w-8 text-indigo-400" />
@@ -335,7 +385,18 @@ export function ResidentialPoolPanel({
                 onChange={(e) => setOnlyResidential(e.target.checked)}
                 className="rounded bg-white/10 border-white/20 text-indigo-600 focus:ring-0"
               />
-              仅显示住宅/家庭宽带
+              仅显示住宅/教育网
+            </label>
+
+            {/* 仅看在线 */}
+            <label className="flex items-center gap-1.5 text-xs text-white/70 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={onlyOnline}
+                onChange={(e) => setOnlyOnline(e.target.checked)}
+                className="rounded bg-white/10 border-white/20 text-indigo-600 focus:ring-0"
+              />
+              仅显示测速在线
             </label>
           </div>
 
@@ -364,6 +425,7 @@ export function ResidentialPoolPanel({
                 setCountryFilter("all");
                 setSearchKeyword("");
                 setOnlyResidential(false);
+                setOnlyOnline(false);
               }}
               className="border-white/10 hover:bg-white/5"
             >
@@ -378,6 +440,7 @@ export function ResidentialPoolPanel({
             const isAlive = activeNodeIds.has(node.id);
             const activeTunnel = tunnels.find((t) => t.id === node.id);
             const isOperating = operatingId === node.id;
+            const isProbing = probingIp === node.ip;
 
             return (
               <Card
@@ -399,16 +462,20 @@ export function ResidentialPoolPanel({
                       </div>
                     </div>
                     {isAlive ? (
-                      <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 text-[10px] shrink-0">
+                      <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 text-[10px] shrink-0 font-mono">
                         ⚡ 端口 {activeTunnel?.port}
                       </Badge>
                     ) : node.reachable ? (
                       <Badge variant="outline" className="border-emerald-500/30 text-emerald-400 text-[10px] shrink-0">
                         {node.latencyMs ? `${node.latencyMs}ms` : "在线"}
                       </Badge>
-                    ) : (
-                      <Badge variant="outline" className="border-white/10 text-white/30 text-[10px] shrink-0">
+                    ) : node.reachable === false ? (
+                      <Badge variant="outline" className="border-rose-500/30 text-rose-400/80 text-[10px] shrink-0">
                         超时
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-white/10 text-white/40 text-[10px] shrink-0">
+                        未探活
                       </Badge>
                     )}
                   </div>
@@ -421,7 +488,7 @@ export function ResidentialPoolPanel({
                       variant="outline"
                       className={cn(
                         "text-[10px] font-normal",
-                        node.ipType.includes("住宅")
+                        node.ipType.includes("住宅") || node.ipType.includes("教育网")
                           ? "border-emerald-500/30 text-emerald-300 bg-emerald-500/10"
                           : "border-indigo-500/30 text-indigo-300 bg-indigo-500/10"
                       )}
@@ -432,7 +499,7 @@ export function ResidentialPoolPanel({
                   <div className="flex items-center justify-between">
                     <span>运营商：</span>
                     <span className="truncate max-w-[160px] text-white/70" title={node.operator}>
-                      {node.operator || "公共家庭宽带"}
+                      {node.operator || "公共宽带"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -444,9 +511,24 @@ export function ResidentialPoolPanel({
                 </CardContent>
 
                 <div className="p-3 border-t border-white/5 flex items-center justify-between gap-2">
-                  <div className="text-[11px] text-white/40">
-                    {isAlive ? "本地回环运行中" : "未建立隧道"}
+                  <div className="flex items-center gap-1.5">
+                    {/* 单节点快速测速按钮 */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleProbeNode(node.ip)}
+                      disabled={isProbing}
+                      className="h-7 px-2 text-[11px] text-white/60 hover:text-white hover:bg-white/5"
+                    >
+                      {isProbing ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      ) : (
+                        <Activity className="h-3 w-3 mr-1 text-indigo-400" />
+                      )}
+                      测速
+                    </Button>
                   </div>
+
                   <div className="flex items-center gap-1.5">
                     {isAlive ? (
                       <>
@@ -475,20 +557,15 @@ export function ResidentialPoolPanel({
                         variant="outline"
                         size="sm"
                         onClick={() => handleStartTunnel(node)}
-                        disabled={isOperating || !node.reachable}
+                        disabled={isOperating}
                         className="h-7 text-xs border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10"
                       >
                         {isOperating ? (
-                          <>
-                            <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                            启动中...
-                          </>
+                          <Loader2 className="h-3 w-3 animate-spin mr-1" />
                         ) : (
-                          <>
-                            <Activity className="h-3 w-3 mr-1" />
-                            启动隧道
-                          </>
+                          <Power className="h-3 w-3 mr-1 text-emerald-400" />
                         )}
+                        启动隧道
                       </Button>
                     )}
                   </div>

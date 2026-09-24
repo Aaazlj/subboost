@@ -299,6 +299,15 @@ export async function updateSubscription(ownerId: string, id: string, body: unkn
       include: { autoUpdateState: true },
     });
   });
+
+  if (current.isPrimary) {
+    try {
+      await applySubscription(ownerId, id);
+    } catch (applyErr) {
+      console.warn("[updateSubscription] 自动重新应用主配置到磁盘失败:", applyErr);
+    }
+  }
+
   return formatSubscription(row);
 }
 

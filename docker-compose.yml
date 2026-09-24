@@ -26,6 +26,7 @@ services:
         condition: service_healthy
     ports:
       - "${SUBBOOST_PORT:-38921}:3000"
+      - "10001-10008:10001-10008"
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -43,6 +44,9 @@ services:
       BASE_PATH: ${BASE_PATH:-/admin}
       NEXT_PUBLIC_BASE_PATH: ${BASE_PATH:-/admin}
       SUBSCRIPTION_OUTPUT_DIR: /data
+      DEFAULT_PUBLIC_IP: ${DEFAULT_PUBLIC_IP:-47.89.253.12}
+      VPN_SOCKS_USER: ${VPN_SOCKS_USER:-subboost}
+      VPN_SOCKS_PASS: ${VPN_SOCKS_PASS:-subboost888}
 
   cron:
     image: curlimages/curl:8.11.1

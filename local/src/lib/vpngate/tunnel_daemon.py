@@ -21,13 +21,33 @@ from pathlib import Path
 DATA_DIR = Path(os.environ.get("SUBSCRIPTION_OUTPUT_DIR", "./data"))
 STATE_FILE = DATA_DIR / "vpngate_tunnels.json"
 CONFIG_DIR = DATA_DIR / "vpngate_configs"
+SETTINGS_FILE = DATA_DIR / "settings.json"
 
-# SOCKS5 简易代理服务，绑定特定 tun 出口
+
+def load_settings() -> dict:
+    defaults = {
+        "publicIp": os.environ.get("DEFAULT_PUBLIC_IP", "47.89.253.12"),
+        "socksUser": os.environ.get("VPN_SOCKS_USER", "subboost"),
+        "socksPass": os.environ.get("VPN_SOCKS_PASS", "subboost888"),
+    }
+    if SETTINGS_FILE.exists():
+        try:
+            saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(saved, dict):
+                defaults.update({k: v for k, v in saved.items() if v})
+        except Exception:
+            pass
+    return defaults
+
+
+# SOCKS5 简易代理服务，支持 RFC 1929 账号密码认证并绑定特定 tun 设备
 class Socks5Relay:
-    def __init__(self, host: str, port: int, tun: str):
+    def __init__(self, host: str, port: int, tun: str, username: str = "", password: str = ""):
         self.host = host
         self.port = port
         self.tun = tun
+        self.username = username
+        self.password = password
         self.running = False
         self.server_sock = None
         self.thread = None
@@ -61,28 +81,70 @@ class Socks5Relay:
         try:
             client.settimeout(15)
             # 1. SOCKS5 握手
-            ver, nmethods = client.recv(1), client.recv(1)
-            if not ver or ver[0] != 5:
+            ver_methods = client.recv(2)
+            if len(ver_methods) < 2 or ver_methods[0] != 5:
                 client.close()
                 return
-            methods = client.recv(nmethods[0])
-            client.sendall(b"\x05\x00") # 无需认证
+            nmethods = ver_methods[1]
+            methods = client.recv(nmethods)
+
+            require_auth = bool(self.username and self.password)
+
+            if require_auth:
+                if 2 not in methods:
+                    # 客户端不支持账号密码认证
+                    client.sendall(b"\x05\xFF")
+                    client.close()
+                    return
+                # 确认使用用户名/密码认证
+                client.sendall(b"\x05\x02")
+
+                # RFC 1929 认证协商
+                auth_ver = client.recv(1)
+                if not auth_ver or auth_ver[0] != 1:
+                    client.close()
+                    return
+                ulen_data = client.recv(1)
+                if not ulen_data:
+                    client.close()
+                    return
+                ulen = ulen_data[0]
+                uname = client.recv(ulen).decode("utf-8", errors="replace")
+
+                plen_data = client.recv(1)
+                if not plen_data:
+                    client.close()
+                    return
+                plen = plen_data[0]
+                passwd = client.recv(plen).decode("utf-8", errors="replace")
+
+                if uname != self.username or passwd != self.password:
+                    client.sendall(b"\x01\x01")  # 失败
+                    client.close()
+                    return
+                client.sendall(b"\x01\x00")  # 认证成功
+            else:
+                if 0 not in methods:
+                    client.sendall(b"\x05\xFF")
+                    client.close()
+                    return
+                client.sendall(b"\x05\x00")  # 无需认证
 
             # 2. 请求阶段
             req = client.recv(4)
-            if len(req) < 4 or req[0] != 5 or req[1] != 1: # 仅支持 CONNECT (0x01)
+            if len(req) < 4 or req[0] != 5 or req[1] != 1:  # 仅支持 CONNECT (0x01)
                 client.sendall(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")
                 client.close()
                 return
 
             atyp = req[3]
             dest_host = ""
-            if atyp == 1: # IPv4
+            if atyp == 1:  # IPv4
                 dest_host = socket.inet_ntoa(client.recv(4))
-            elif atyp == 3: # 域名
+            elif atyp == 3:  # 域名
                 domain_len = client.recv(1)[0]
                 dest_host = client.recv(domain_len).decode("utf-8", errors="replace")
-            elif atyp == 4: # IPv6
+            elif atyp == 4:  # IPv6
                 dest_host = socket.inet_ntop(socket.AF_INET6, client.recv(16))
             else:
                 client.close()
@@ -95,7 +157,7 @@ class Socks5Relay:
             remote.settimeout(10)
             if self.tun:
                 try:
-                    # SO_BINDTODEVICE = 25
+                    # SO_BINDTODEVICE = 25 (Linux)
                     remote.setsockopt(socket.SOL_SOCKET, 25, self.tun.encode("utf-8"))
                 except Exception:
                     pass
@@ -188,9 +250,23 @@ def write_ovpn_file(raw_ovpn: str, tun_name: str, index: int) -> Path:
     return ovpn_path
 
 
-def start_tunnel(node_id: str, hostname: str, ip: str, country: str, port: int, ovpn_b64: str) -> dict:
+def start_tunnel(
+    node_id: str,
+    hostname: str,
+    ip: str,
+    country: str,
+    port: int,
+    ovpn_b64: str,
+    bind_ip: str = "0.0.0.0",
+    username: str = "",
+    password: str = "",
+) -> dict:
+    settings = load_settings()
+    user = username or settings.get("socksUser", "subboost")
+    pwd = password or settings.get("socksPass", "subboost888")
+    public_ip = settings.get("publicIp", "47.89.253.12")
+
     state = load_state()
-    # 查找空闲索引
     used_tuns = {item.get("tun") for item in state if item.get("alive")}
     idx = 1
     while f"tun{idx}" in used_tuns:
@@ -227,8 +303,10 @@ def start_tunnel(node_id: str, hostname: str, ip: str, country: str, port: int, 
     run_cmd(f"ip rule del oif {tun_name} 2>/dev/null")
     run_cmd(f"ip rule add oif {tun_name} table {table_id} pref {table_id}")
 
-    # 启动只监听回环的 SOCKS5 代理
-    proxy_cmd = f"python3 {__file__} run-proxy --port {port} --tun {tun_name} >/dev/null 2>&1 &"
+    # 启动支持鉴权的 SOCKS5 代理
+    user_arg = f"--user '{user}'" if user else ""
+    pass_arg = f"--pass '{pwd}'" if pwd else ""
+    proxy_cmd = f"python3 {__file__} run-proxy --bind {bind_ip} --port {port} --tun {tun_name} {user_arg} {pass_arg} >/dev/null 2>&1 &"
     subprocess.Popen(proxy_cmd, shell=True)
 
     tunnel_info = {
@@ -238,6 +316,9 @@ def start_tunnel(node_id: str, hostname: str, ip: str, country: str, port: int, 
         "country": country,
         "tun": tun_name,
         "port": port,
+        "publicIp": public_ip,
+        "username": user,
+        "password": pwd,
         "tableId": table_id,
         "alive": True,
         "startTime": int(time.time()),
@@ -266,11 +347,12 @@ def stop_tunnel(node_id: str) -> dict:
 
     tun_name = target.get("tun", "")
     table_id = target.get("tableId")
+    port = target.get("port")
 
-    # 停止 OpenVPN 进程
+    # 停止 OpenVPN 进程与 SOCKS5 代理
     if tun_name:
         run_cmd(f"pkill -f 'ovpn_{tun_name}'")
-        run_cmd(f"pkill -f 'run-proxy --port {target.get('port')}'")
+        run_cmd(f"pkill -f 'run-proxy .*--port {port}'")
         if table_id:
             run_cmd(f"ip rule del oif {tun_name} 2>/dev/null")
             run_cmd(f"ip route flush table {table_id} 2>/dev/null")
@@ -290,6 +372,9 @@ def main():
     start_p.add_argument("--country", required=True)
     start_p.add_argument("--port", type=int, required=True)
     start_p.add_argument("--ovpn-b64", required=True)
+    start_p.add_argument("--bind", default="0.0.0.0")
+    start_p.add_argument("--user", default="")
+    start_p.add_argument("--pass", dest="passwd", default="")
 
     stop_p = subparsers.add_parser("stop")
     stop_p.add_argument("--id", required=True)
@@ -297,13 +382,26 @@ def main():
     subparsers.add_parser("list")
 
     proxy_p = subparsers.add_parser("run-proxy")
+    proxy_p.add_argument("--bind", default="0.0.0.0")
     proxy_p.add_argument("--port", type=int, required=True)
     proxy_p.add_argument("--tun", required=True)
+    proxy_p.add_argument("--user", default="")
+    proxy_p.add_argument("--pass", dest="passwd", default="")
 
     args = parser.parse_args()
 
     if args.action == "start":
-        res = start_tunnel(args.id, args.hostname, args.ip, args.country, args.port, args.ovpn_b64)
+        res = start_tunnel(
+            node_id=args.id,
+            hostname=args.hostname,
+            ip=args.ip,
+            country=args.country,
+            port=args.port,
+            ovpn_b64=args.ovpn_b64,
+            bind_ip=args.bind,
+            username=args.user,
+            password=args.passwd,
+        )
         print(json.dumps(res, ensure_ascii=False))
     elif args.action == "stop":
         res = stop_tunnel(args.id)
@@ -312,7 +410,13 @@ def main():
         state = load_state()
         print(json.dumps({"success": True, "tunnels": state}, ensure_ascii=False))
     elif args.action == "run-proxy":
-        relay = Socks5Relay("127.0.0.1", args.port, args.tun)
+        relay = Socks5Relay(
+            host=args.bind,
+            port=args.port,
+            tun=args.tun,
+            username=args.user,
+            password=args.passwd,
+        )
         relay.start()
         # 保持前台
         while True:

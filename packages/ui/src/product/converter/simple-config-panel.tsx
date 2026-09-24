@@ -13,10 +13,12 @@ import {
   Link as LinkIcon,
   Loader2,
   Plus,
+  Radio,
   RefreshCw,
   Save,
   Search,
   Server,
+  Settings,
   Trash2,
   X,
   Zap,
@@ -37,6 +39,8 @@ import { batchFormatNodesWithRegion, regionFromGeo, resolveNodeRegion } from "@s
 import type { ParsedNode } from "@subboost/core/types/node";
 import { cn } from "@subboost/ui/lib/utils";
 import { ResidentialPoolPanel, type ActiveTunnelItem } from "./residential-pool-panel";
+import { ActiveTunnelsPanel } from "./active-tunnels-panel";
+import { SettingsPanel } from "./settings-panel";
 
 type SubscriptionItem = {
   id: string;
@@ -104,15 +108,38 @@ export function SimpleConfigPanel() {
     generateConfig,
   } = useConfigStore();
 
-  // 页面模式：list 列表视图 | edit 详情配置视图 | residential 住宅节点池视图
-  const [viewMode, setViewMode] = React.useState<"list" | "edit" | "residential">("list");
+  // 后台全局导航：subscriptions 订阅管理 | residential 全球住宅节点池 | tunnels 已激活隧道管理 | settings 系统设置
+  const [mainNav, setMainNav] = React.useState<"subscriptions" | "residential" | "tunnels" | "settings">("subscriptions");
+  // 订阅管理子视图：list 列表视图 | edit 编辑详情视图
+  const [viewMode, setViewMode] = React.useState<"list" | "edit">("list");
 
-  // 引入住宅落地节点弹窗状态
+  // 引入住宅落地节点弹窗状态与接入模式
   const [residentialDialogOpen, setResidentialDialogOpen] = React.useState(false);
+  const [residentialMode, setResidentialMode] = React.useState<"transit" | "direct">("transit");
   const [activeTunnels, setActiveTunnels] = React.useState<ActiveTunnelItem[]>([]);
+  const [activeTunnelCount, setActiveTunnelCount] = React.useState<number>(0);
   const [selectedTunnelId, setSelectedTunnelId] = React.useState<string>("");
   const [selectedDialerProxy, setSelectedDialerProxy] = React.useState<string>("");
   const [isLoadingActiveTunnels, setIsLoadingActiveTunnels] = React.useState(false);
+
+  // 定时刷新活跃隧道数量（供侧边栏 Badge 显示）
+  const fetchActiveTunnelCount = React.useCallback(async () => {
+    try {
+      const res = await fetch(withBasePath("/api/vpngate/tunnels"), { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.tunnels)) {
+          setActiveTunnelCount(data.tunnels.length);
+        }
+      }
+    } catch {}
+  }, []);
+
+  React.useEffect(() => {
+    fetchActiveTunnelCount();
+    const timer = setInterval(fetchActiveTunnelCount, 12000);
+    return () => clearInterval(timer);
+  }, [fetchActiveTunnelCount]);
 
   // 配置列表状态
   const [subscriptions, setSubscriptions] = React.useState<SubscriptionItem[]>([]);
@@ -298,17 +325,19 @@ export function SimpleConfigPanel() {
       toast({ title: "请选择活跃隧道", variant: "destructive" });
       return;
     }
-    if (!selectedDialerProxy) {
+    if (residentialMode === "transit" && !selectedDialerProxy) {
       toast({
         title: "请选择前置中转节点",
-        description: "住宅落地节点必须通过前置中转节点进行 dialer-proxy 拨号。",
+        description: "链式中转模式必须选择前置中转节点进行 dialer-proxy 拨号。",
         variant: "destructive",
       });
       return;
     }
 
     const reg = regionFromGeo(tunnel.country, tunnel.country);
-    const baseName = `${reg.emoji}${reg.label}-socks5[住宅IP]`;
+    const host = tunnel.publicIp || "47.89.253.12";
+    const modeTag = residentialMode === "transit" ? "住宅IP" : "直连住宅";
+    const baseName = `${reg.emoji}${reg.label}-socks5[${modeTag}]`;
 
     // 避免同名冲突
     let finalName = baseName;
@@ -318,23 +347,29 @@ export function SimpleConfigPanel() {
       finalName = `${baseName} (${counter++})`;
     }
 
-    const newNode = {
+    const newNode: Record<string, unknown> = {
       name: finalName,
       type: "socks5",
-      server: "127.0.0.1",
+      server: host,
       port: tunnel.port,
-      "dialer-proxy": selectedDialerProxy,
       udp: true,
       _originName: finalName,
       _isResidential: true,
-    } as unknown as ParsedNode;
+    };
 
-    useConfigStore.setState({ nodes: [...nodes, newNode] });
+    if (tunnel.username) newNode.username = tunnel.username;
+    if (tunnel.password) newNode.password = tunnel.password;
+
+    if (residentialMode === "transit") {
+      newNode["dialer-proxy"] = selectedDialerProxy;
+    }
+
+    useConfigStore.setState({ nodes: [...nodes, newNode as unknown as ParsedNode] });
     generateConfig();
     setResidentialDialogOpen(false);
     toast({
       title: "已引入住宅落地节点",
-      description: `「${finalName}」已加入节点列表，前置拨号节点为「${selectedDialerProxy}」。`,
+      description: `「${finalName}」已加入节点列表 (公网地址: ${host}:${tunnel.port}${residentialMode === "transit" ? `，前置拨号: ${selectedDialerProxy}` : ""})。`,
     });
   };
 
@@ -774,53 +809,143 @@ export function SimpleConfigPanel() {
   };
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      {/* 顶部全局主导航 Tab */}
-      <div className="flex items-center justify-between border-b border-white/10 pb-4">
-        <div className="flex items-center gap-2">
-          <Button
-            variant={viewMode !== "residential" ? "default" : "ghost"}
-            size="sm"
-            onClick={() => setViewMode("list")}
-            className={cn(
-              "h-9 px-4 text-sm font-medium transition-all",
-              viewMode !== "residential"
-                ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20"
-                : "text-white/60 hover:text-white hover:bg-white/5"
-            )}
-          >
-            <Layers className="h-4 w-4 mr-2" />
-            订阅配置管理
-          </Button>
-          <Button
-            variant={viewMode === "residential" ? "default" : "ghost"}
-            size="sm"
-            onClick={() => setViewMode("residential")}
-            className={cn(
-              "h-9 px-4 text-sm font-medium transition-all",
-              viewMode === "residential"
-                ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20"
-                : "text-white/60 hover:text-white hover:bg-white/5"
-            )}
-          >
-            <Globe2 className="h-4 w-4 mr-2 text-emerald-400" />
-            全球住宅节点池
-          </Button>
+    <div className="min-h-[calc(100vh-4rem)] w-full flex flex-col md:flex-row bg-[#0a0b0e] text-slate-100">
+      {/* 左侧固定侧边栏 */}
+      <aside className="w-full md:w-64 bg-neutral-950/80 backdrop-blur-xl border-b md:border-b-0 md:border-r border-white/10 flex flex-col shrink-0 p-4 space-y-6 select-none">
+        {/* Logo 与系统标题 */}
+        <div className="flex items-center gap-3 px-2 py-1">
+          <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-indigo-600/30 text-white font-bold">
+            <Zap className="h-5 w-5 fill-white text-white" />
+          </div>
+          <div>
+            <div className="font-bold text-white text-sm tracking-wide">SubBoost</div>
+            <div className="text-[10px] text-white/40">订阅加速与住宅代理</div>
+          </div>
         </div>
-      </div>
 
-      {viewMode === "residential" ? (
-        /* ========== 全球住宅节点池视图 ========== */
-        <ResidentialPoolPanel
-          onBackToConfig={() => setViewMode("list")}
-          onSelectTunnelForConfig={(tunnel) => {
-            setViewMode("edit");
-            handleOpenResidentialDialog(tunnel);
-          }}
-        />
-      ) : viewMode === "list" ? (
-        /* ========== 列表页视图 ========== */
-        <div className="space-y-6">
+        {/* 导航菜单 */}
+        <nav className="space-y-1.5 flex-1">
+          <button
+            type="button"
+            onClick={() => setMainNav("subscriptions")}
+            className={cn(
+              "w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium transition-all text-left",
+              mainNav === "subscriptions"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            )}
+          >
+            <div className="flex items-center gap-2.5">
+              <Layers className="h-4 w-4" />
+              <span>订阅配置管理</span>
+            </div>
+            {subscriptions.length > 0 && (
+              <span
+                className={cn(
+                  "text-[10px] px-1.5 py-0.5 rounded-md",
+                  mainNav === "subscriptions" ? "bg-white/20 text-white" : "bg-white/5 text-white/40"
+                )}
+              >
+                {subscriptions.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMainNav("residential")}
+            className={cn(
+              "w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium transition-all text-left",
+              mainNav === "residential"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            )}
+          >
+            <div className="flex items-center gap-2.5">
+              <Globe2 className="h-4 w-4 text-emerald-400" />
+              <span>全球住宅节点池</span>
+            </div>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              全球
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMainNav("tunnels")}
+            className={cn(
+              "w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium transition-all text-left",
+              mainNav === "tunnels"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            )}
+          >
+            <div className="flex items-center gap-2.5">
+              <Zap className="h-4 w-4 text-amber-400" />
+              <span>已激活隧道管理</span>
+            </div>
+            {activeTunnelCount > 0 && (
+              <Badge className="h-4 px-1.5 text-[10px] bg-emerald-500 text-black font-mono font-bold animate-pulse">
+                {activeTunnelCount}
+              </Badge>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMainNav("settings")}
+            className={cn(
+              "w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium transition-all text-left",
+              mainNav === "settings"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
+                : "text-white/60 hover:text-white hover:bg-white/5"
+            )}
+          >
+            <div className="flex items-center gap-2.5">
+              <Settings className="h-4 w-4 text-indigo-300" />
+              <span>系统与代理设置</span>
+            </div>
+          </button>
+        </nav>
+
+        {/* 侧边栏底部状态 */}
+        <div className="p-3 rounded-xl bg-white/[0.03] border border-white/5 space-y-1.5 text-[11px]">
+          <div className="flex items-center justify-between text-white/50">
+            <span>主订阅直链</span>
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+          </div>
+          <div className="font-mono text-emerald-400 truncate text-[10px]">
+            https://clash.leozai.com
+          </div>
+        </div>
+      </aside>
+
+      {/* 右侧主工作面板 */}
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 overflow-y-auto">
+        {mainNav === "residential" ? (
+          <ResidentialPoolPanel
+            onBackToConfig={() => setMainNav("subscriptions")}
+            onSelectTunnelForConfig={(tunnel) => {
+              setMainNav("subscriptions");
+              setViewMode("edit");
+              handleOpenResidentialDialog(tunnel);
+            }}
+            onGoToActiveTunnels={() => setMainNav("tunnels")}
+          />
+        ) : mainNav === "tunnels" ? (
+          <ActiveTunnelsPanel
+            onInjectTunnelToConfig={(tunnel) => {
+              setMainNav("subscriptions");
+              setViewMode("edit");
+              handleOpenResidentialDialog(tunnel);
+            }}
+            onGoToResidentialPool={() => setMainNav("residential")}
+          />
+        ) : mainNav === "settings" ? (
+          <SettingsPanel />
+        ) : viewMode === "list" ? (
+          /* ========== 列表页视图 ========== */
+          <div className="space-y-6">
           {/* 列表页顶部 Header */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-white/10 pb-5">
             <div>
@@ -1425,6 +1550,7 @@ export function SimpleConfigPanel() {
       </div>
         </div>
       )}
+      </main>
 
       {/* 订阅链接展示弹窗（生成三种链接） */}
       <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
@@ -1518,10 +1644,10 @@ export function SimpleConfigPanel() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <Globe2 className="h-5 w-5 text-emerald-400" />
-              引入住宅落地节点 (dialer-proxy)
+              引入住宅落地节点
             </DialogTitle>
             <DialogDescription className="text-white/60 text-xs">
-              将 VPS 本地守护的 OpenVPN 住宅隧道作为落地出口，通过现有中转节点链式拨号，保障出口纯净住宅 IP。
+              将服务器守护的 OpenVPN 住宅出口注入到当前订阅配置中，支持中转链式中转与直连双模式。
             </DialogDescription>
           </DialogHeader>
 
@@ -1541,7 +1667,7 @@ export function SimpleConfigPanel() {
                   size="sm"
                   onClick={() => {
                     setResidentialDialogOpen(false);
-                    setViewMode("residential");
+                    setMainNav("residential");
                   }}
                   className="h-7 text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40"
                 >
@@ -1550,8 +1676,53 @@ export function SimpleConfigPanel() {
               </div>
             ) : (
               <>
+                {/* 模式选择 */}
                 <div className="space-y-1.5">
-                  <label className="text-white/70 font-medium">1. 选择活跃住宅隧道</label>
+                  <label className="text-white/70 font-medium">1. 选择接入落地模式</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setResidentialMode("transit")}
+                      className={cn(
+                        "p-2.5 rounded-lg border text-left transition-all",
+                        residentialMode === "transit"
+                          ? "border-emerald-500/50 bg-emerald-500/10 text-white shadow-sm"
+                          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20"
+                      )}
+                    >
+                      <div className="font-medium text-xs flex items-center gap-1.5">
+                        <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                        链式中转落地 (dialer-proxy)
+                      </div>
+                      <div className="text-[10px] text-white/40 mt-1 leading-tight">
+                        前置机场节点连接 VPS 公网端口，再由住宅隧道送出，兼顾高速与住宅 IP
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setResidentialMode("direct")}
+                      className={cn(
+                        "p-2.5 rounded-lg border text-left transition-all",
+                        residentialMode === "direct"
+                          ? "border-emerald-500/50 bg-emerald-500/10 text-white shadow-sm"
+                          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20"
+                      )}
+                    >
+                      <div className="font-medium text-xs flex items-center gap-1.5">
+                        <span className="h-2 w-2 rounded-full bg-indigo-400" />
+                        直连公网落地
+                      </div>
+                      <div className="text-[10px] text-white/40 mt-1 leading-tight">
+                        客户端直接连接 VPS 对应端口，无需配置前置节点，适合直连网络畅通场景
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 活跃隧道选择 */}
+                <div className="space-y-1.5">
+                  <label className="text-white/70 font-medium">2. 选择活跃住宅隧道</label>
                   <select
                     value={selectedTunnelId}
                     onChange={(e) => setSelectedTunnelId(e.target.value)}
@@ -1561,46 +1732,49 @@ export function SimpleConfigPanel() {
                       const reg = regionFromGeo(t.country, t.country);
                       return (
                         <option key={t.id} value={t.id} className="bg-neutral-900 text-white">
-                          {reg.emoji} {reg.label} ({t.ip}) - 本地端口 :{t.port} [{t.tun}]
+                          {reg.emoji} {reg.label} ({t.ip}) - 公网端口 :{t.port} [{t.tun}]
                         </option>
                       );
                     })}
                   </select>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-white/70 font-medium">2. 选择前置中转节点 (dialer-proxy)</label>
-                  {nodes.filter((n) => !(n as unknown as Record<string, unknown>)["_isResidential"]).length === 0 ? (
-                    <p className="text-rose-400 text-[11px]">
-                      当前配置中暂无可用前置节点，请先在左侧解析并导入至少一个常规代理节点。
+                {/* 前置节点选择 (仅在 transit 模式需要) */}
+                {residentialMode === "transit" && (
+                  <div className="space-y-1.5">
+                    <label className="text-white/70 font-medium">3. 选择前置中转节点 (dialer-proxy)</label>
+                    {nodes.filter((n) => !(n as unknown as Record<string, unknown>)["_isResidential"]).length === 0 ? (
+                      <p className="text-rose-400 text-[11px]">
+                        当前配置中暂无可用前置节点，请先在下方解析并导入至少一个常规代理节点。
+                      </p>
+                    ) : (
+                      <select
+                        value={selectedDialerProxy}
+                        onChange={(e) => setSelectedDialerProxy(e.target.value)}
+                        className="w-full h-9 px-3 rounded-lg bg-white/5 border border-white/10 text-white focus:outline-none focus:border-emerald-500 font-mono"
+                      >
+                        <option value="" disabled className="bg-neutral-900 text-white/50">
+                          -- 请选择前置中转节点 --
+                        </option>
+                        {nodes
+                          .filter((n) => !(n as unknown as Record<string, unknown>)["_isResidential"])
+                          .map((n) => (
+                            <option key={n.name} value={n.name} className="bg-neutral-900 text-white">
+                              {n.name} ({n.type})
+                            </option>
+                          ))}
+                      </select>
+                    )}
+                    <p className="text-[11px] text-white/40">
+                      前置节点将负责中转连接到 VPS 真实公网 IP 及对应端口。
                     </p>
-                  ) : (
-                    <select
-                      value={selectedDialerProxy}
-                      onChange={(e) => setSelectedDialerProxy(e.target.value)}
-                      className="w-full h-9 px-3 rounded-lg bg-white/5 border border-white/10 text-white focus:outline-none focus:border-emerald-500 font-mono"
-                    >
-                      <option value="" disabled className="bg-neutral-900 text-white/50">
-                        -- 请选择前置中转节点 --
-                      </option>
-                      {nodes
-                        .filter((n) => !(n as unknown as Record<string, unknown>)["_isResidential"])
-                        .map((n) => (
-                          <option key={n.name} value={n.name} className="bg-neutral-900 text-white">
-                            {n.name} ({n.type})
-                          </option>
-                        ))}
-                    </select>
-                  )}
-                  <p className="text-[11px] text-white/40">
-                    流量将先流经此前置节点到达 VPS 本地回环端口，再由 OpenVPN 隧道送达目标住宅 IP。
-                  </p>
-                </div>
+                  </div>
+                )}
 
                 <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-white/60 space-y-1 text-[11px]">
-                  <p className="font-semibold text-emerald-400">🛡️ 安全与链路保障：</p>
-                  <p>• 本地 SOCKS5 代理仅监听 127.0.0.1，公网完全隐身，免遭扫描。</p>
-                  <p>• 自动在生成的 Clash 配置中注入 <code className="text-emerald-300">dialer-proxy</code> 链式代理参数。</p>
+                  <p className="font-semibold text-emerald-400">🛡️ 端口与安全状态：</p>
+                  <p>• 节点连接地址将自动使用服务器公网 IP，SOCKS5 认证账号已内嵌。</p>
+                  <p>• 经测试确认支持 Clash Verge / Meta 链式代理与标准 SOCKS5 客户端。</p>
                 </div>
               </>
             )}
@@ -1621,8 +1795,8 @@ export function SimpleConfigPanel() {
               disabled={
                 isLoadingActiveTunnels ||
                 activeTunnels.length === 0 ||
-                !selectedDialerProxy ||
-                !selectedTunnelId
+                !selectedTunnelId ||
+                (residentialMode === "transit" && !selectedDialerProxy)
               }
               className="bg-emerald-600 hover:bg-emerald-500 text-white"
             >
