@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
+import net from "node:net";
 import { promisify } from "node:util";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import type { VpngateNode } from "./vpngate-fetcher";
 
 const execFileAsync = promisify(execFile);
@@ -29,6 +30,11 @@ export type ActiveTunnel = {
   password?: string;
   tableId: number;
   alive: boolean;
+  /** 看门狗最近一次端到端公网探测的结果；旧状态文件可能没有该字段 */
+  healthy?: boolean;
+  lastCheckAt?: number;
+  lastError?: string;
+  restarts?: number;
   startTime: number;
 };
 
@@ -74,24 +80,70 @@ export async function updateSystemSettings(settings: Partial<SystemSettings>): P
   return updated;
 }
 
+async function readTunnels(): Promise<ActiveTunnel[]> {
+  try {
+    const content = await readFile(STATE_FILE, "utf-8");
+    const list = JSON.parse(content);
+    return Array.isArray(list) ? (list as ActiveTunnel[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeTunnels(tunnels: ActiveTunnel[]): Promise<void> {
+  try {
+    await writeFile(STATE_FILE, JSON.stringify(tunnels, null, 2), "utf-8");
+  } catch {
+    // 状态文件写入失败不应影响只读请求
+  }
+}
+
+/** SOCKS5 中继进程是否还在监听（容器重启后状态文件会残留，必须与真实进程对账） */
+function isPortListening(port: number, timeoutMs = 800): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(result);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+  });
+}
+
+/**
+ * 与真实进程对账：丢弃状态文件里已被回收的隧道条目，避免前端显示「假的活跃隧道」，
+ * 并让被卡住的端口号重新可用。
+ */
+export async function reconcileTunnels(): Promise<ActiveTunnel[]> {
+  const tunnels = await readTunnels();
+  if (tunnels.length === 0) return [];
+
+  const listening = await Promise.all(tunnels.map((tunnel) => isPortListening(tunnel.port)));
+  const alive = tunnels.filter((_, index) => listening[index]);
+  if (alive.length !== tunnels.length) {
+    await writeTunnels(alive);
+  }
+  return alive;
+}
+
 /**
  * 获取当前所有活跃隧道列表
  */
 export async function listActiveTunnels(): Promise<ActiveTunnel[]> {
-  try {
-    const content = await readFile(STATE_FILE, "utf-8");
-    const list = JSON.parse(content);
-    return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
-  }
+  return reconcileTunnels();
 }
 
 /**
  * 挑选未占用的回环代理端口 (10001 - 10008)
  */
 async function allocateLoopbackPort(): Promise<number> {
-  const tunnels = await listActiveTunnels();
+  const tunnels = await reconcileTunnels();
   const usedPorts = new Set(tunnels.map((t) => t.port));
   for (let port = PORT_START; port <= PORT_END; port++) {
     if (!usedPorts.has(port)) return port;

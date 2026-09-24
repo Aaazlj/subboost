@@ -21,7 +21,7 @@ import {
   sanitizePublicErrorText,
   type SubscriptionImportErrorInfo,
 } from "@subboost/core/subscription/import-error";
-import { stripImportedNodeControlFieldsFromList } from "@subboost/core/subscription/imported-node-controls";
+import { stripImportedNodeControlFieldsFromList, stripUiOwnedNodeFlagsFromList } from "@subboost/core/subscription/imported-node-controls";
 import { tryNormalizeSubscriptionUrlInput } from "@subboost/core/subscription/url-input";
 import type { ConfigActions, SubscriptionSource } from "./definitions";
 import {
@@ -138,7 +138,9 @@ export function createSourceActions(set: SetState, get: GetState, setAndGenerate
 
       try {
         const result: ParseResult = parseSubscription(content);
-        const sanitizedNodes = stripImportedNodeControlFieldsFromList(result.nodes);
+        const sanitizedNodes = stripUiOwnedNodeFlagsFromList(
+          stripImportedNodeControlFieldsFromList(result.nodes)
+        );
 
         setAndGenerateConfig((state) => {
           const normalizeOriginName = (node: ParsedNode): ParsedNode => {

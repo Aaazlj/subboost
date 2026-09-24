@@ -1,6 +1,6 @@
 import { formatNodeNameFromTemplate } from "../node-name-template";
 import { buildNodeContentKey, buildScopedNodeIdentityKey } from "../node-identity";
-import { stripImportedNodeControlFields } from "./imported-node-controls";
+import { stripImportedNodeControlFields, stripUiOwnedNodeFlags } from "./imported-node-controls";
 import {
   getNodeOriginName,
   getNodeSourceIds,
@@ -48,7 +48,8 @@ export function prepareSourceParsedNodes(
   const template = normalizeOptionalString(descriptor.currentNameTemplate);
 
   return nodes.map((node) => {
-    const sanitizedNode = stripImportedNodeControlFields(node);
+    // 订阅来源的节点不允许自称本应用创建的住宅落地节点
+    const sanitizedNode = stripUiOwnedNodeFlags(stripImportedNodeControlFields(node));
     const record = sanitizedNode as unknown as Record<string, unknown>;
     const originName = getNodeOriginName(sanitizedNode).trim();
 

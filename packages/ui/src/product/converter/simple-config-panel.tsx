@@ -352,7 +352,9 @@ export function SimpleConfigPanel() {
       type: "socks5",
       server: host,
       port: tunnel.port,
-      udp: true,
+      // 住宅落地走本项目自建的 SOCKS5 中继，只实现了 CONNECT，标记 UDP 会让客户端
+      // 走 UDP ASSOCIATE 失败，因此这里必须是 false。
+      udp: false,
       _originName: finalName,
       _isResidential: true,
     };

@@ -27,6 +27,8 @@ import { normalizeSubscriptionUrlInput, tryNormalizeSubscriptionUrlInput } from 
 import {
   stripImportedNodeControlFields,
   stripImportedNodeControlFieldsFromList,
+  stripUiOwnedNodeFlags,
+  stripUiOwnedNodeFlagsFromList,
 } from "./imported-node-controls";
 
 function ssNode(name: string, extra: Record<string, unknown> = {}): ParsedNode {
@@ -153,6 +155,28 @@ describe("subscription node source state helpers", () => {
     expect(stripImportedNodeControlFields(plain)).toBe(plain);
     expect(stripImportedNodeControlFields(imported)).toEqual(ssNode("Imported"));
     expect(stripImportedNodeControlFieldsFromList([plain, imported])).toEqual([plain, ssNode("Imported")]);
+  });
+
+  it("keeps dialer-proxy for UI-owned residential nodes but not for imported ones", () => {
+    const residential = ssNode("Residential", { "dialer-proxy": "relay", _isResidential: true });
+
+    // 界面自建的住宅落地节点：保留链式落地字段
+    expect(stripImportedNodeControlFields(residential)).toEqual(
+      ssNode("Residential", { "dialer-proxy": "relay", _isResidential: true })
+    );
+
+    // 导入路径会先清掉界面标记，订阅内容因此无法伪装成住宅节点保留 dialer-proxy
+    expect(stripUiOwnedNodeFlags(residential)).toEqual(ssNode("Residential", { "dialer-proxy": "relay" }));
+    expect(stripUiOwnedNodeFlagsFromList([residential])).toEqual([
+      ssNode("Residential", { "dialer-proxy": "relay" }),
+    ]);
+    expect(
+      stripImportedNodeControlFields(stripUiOwnedNodeFlags(residential))
+    ).toEqual(ssNode("Residential"));
+
+    // 未携带标记的节点行为不变
+    const plainNode = ssNode("Plain");
+    expect(stripUiOwnedNodeFlags(plainNode)).toBe(plainNode);
   });
 });
 

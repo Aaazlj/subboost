@@ -17,6 +17,9 @@ services:
   app:
     image: ${SUBBOOST_IMAGE:-ghcr.io/aaazlj/subboost:latest}
     restart: unless-stopped
+    # 作为 PID 1 的 init 进程回收孤儿进程：隧道用 `openvpn --daemon` 启动，
+    # 没有 init 时退出的子进程会累积成僵尸。
+    init: true
     depends_on:
       db:
         condition: service_healthy
